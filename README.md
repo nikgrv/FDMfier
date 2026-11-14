@@ -20,9 +20,11 @@ renderable geometry.
 
 ## Install
 
-1. In Blender 5.3 on Apple Silicon, open **Edit → Preferences → Add-ons**.
+Tested with Blender 5.3 on Apple Silicon. Windows x64, Linux x64/ARM64, and Intel Mac builds are untested. The Intel Mac package requires a custom Blender 5.3 build with Python 3.13. Blender 4.5 LTS was the last official Intel Mac release.
+
+1. In Blender 5.3, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
-   `FDMfier-1.0.0.zip`. Enable **FDMfier** if needed.
+   `FDMfier-1.0.1.zip`. Enable **FDMfier** if needed.
    If you installed a development build, disable it before enabling V1. Blender
    treats the new package ID as a separate extension.
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
@@ -96,11 +98,11 @@ From the workspace root, using the Blender 5.3 executable as `blender`:
 ```sh
 blender -b --command extension build --source-dir ./fdm_print_preview --output-dir .
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.0.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.1.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 
-The package bundles the macOS CPython 3.13 wheel for
+The package bundles CPython 3.13 wheels for
 [pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/). Third-party license
 notices are included inside the wheel.
 

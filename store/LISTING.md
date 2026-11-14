@@ -1,9 +1,9 @@
 # FDMfier
 
-**Developer** Nikita Goryainov - nik.grv  
-**Version** V1 (1.0.0)  
-**Category** Modeling  
-**Compatibility** Blender 5.3 on Apple Silicon  
+**Developer** Nikita Goryainov - nik.grv
+**Version** 1.0.1
+**Category** Modeling
+**Compatibility** Tested with Blender 5.3 on Apple Silicon. Windows x64, Linux x64/ARM64, and Intel Mac builds are untested. The Intel Mac package requires a custom Blender 5.3 build with Python 3.13. Blender 4.5 LTS was the last official Intel Mac release.
 **License** GPL-3.0-or-later
 
 ## Short description
@@ -20,6 +20,6 @@ Open the 3D Viewport sidebar with **N**, select **FDMfier**, and click **Generat
 
 ## Submission
 
-Use the validated `FDMfier-1.0.0.zip` and the included preview render for the [Blender Extensions submission](https://extensions.blender.org/about/). The ZIP contains the extension's Python source, documentation, GPL notice, and bundled pyclipper wheel with its license notices. The extension runs offline. The package ID is `FDMfier`.
+Use the validated `FDMfier-1.0.1.zip` and the included preview render for the [Blender Extensions submission](https://extensions.blender.org/about/). The ZIP contains the extension's Python source, documentation, GPL notice, and bundled pyclipper wheel with its license notices. The extension runs offline. The package ID is `FDMfier`.
 
 Suggested image caption: Fused print with a concentric top pattern, rounded layer ridges, and a first-layer brim.
