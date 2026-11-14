@@ -16,3 +16,14 @@ Tested with Blender 5.3 on Apple Silicon Macs. Other platforms have not been tes
 - [ ] Linux
 
 Download the ZIP, then use **Preferences → Add-ons → Install from Disk**. Open **FDMfier** in the 3D Viewport sidebar.
+
+## Benchy renders
+
+![Blue Benchy with visible layer lines](https://raw.githubusercontent.com/nikior9/FDMfier/main/docs/images/benchy_blue_100.png)
+*Blue filament with visible layer lines.*
+
+![Blue Benchy with simulated print imperfections and stringing](https://raw.githubusercontent.com/nikior9/FDMfier/main/docs/images/benchy_blue_100_imp.png)
+*Blue filament with simulated imperfections.*
+
+![Transparent Benchy with visible extrusion layers](https://raw.githubusercontent.com/nikior9/FDMfier/main/docs/images/benchy_transparent_100.png)
+*Transparent material with visible extrusion layers.*

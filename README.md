@@ -7,6 +7,17 @@ a seam, and optional supports, skirt, and brim. The add-on slices the evaluated
 mesh, including modifiers. A Geometry Nodes modifier turns its paths into
 renderable geometry.
 
+## Benchy renders
+
+![Blue Benchy with visible layer lines](docs/images/benchy_blue_100.png)
+*Blue filament with visible layer lines.*
+
+![Blue Benchy with simulated print imperfections and stringing](docs/images/benchy_blue_100_imp.png)
+*Blue filament with simulated imperfections.*
+
+![Transparent Benchy with visible extrusion layers](docs/images/benchy_transparent_100.png)
+*Transparent material with visible extrusion layers.*
+
 ## Install
 
 1. In Blender 5.3 on Apple Silicon, open **Edit → Preferences → Add-ons**.
