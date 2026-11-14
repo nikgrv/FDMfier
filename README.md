@@ -1,6 +1,5 @@
-# FDMfier for Blender
+# FDMfier add-on for Blender
 
-By Nikita Goryainov - nik.grv. Licensed under GPL-3.0-or-later.
 
 Turn a closed mesh into an FDM-style replica with visible extrusion beads, infill,
 a seam, and optional supports, skirt, and brim. The add-on slices the evaluated
@@ -24,7 +23,7 @@ Tested with Blender 5.3 on Apple Silicon. Windows x64, Linux x64/ARM64, and Inte
 
 1. In Blender 5.3, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
-   `FDMfier-1.0.1.zip`. Enable **FDMfier** if needed.
+   `FDMfier-x.x.x.zip`. Enable **FDMfier** if needed.
    If you installed a development build, disable it before enabling V1. Blender
    treats the new package ID as a separate extension.
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
