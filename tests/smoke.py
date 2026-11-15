@@ -1,4 +1,4 @@
-"""Run with the built extension enabled in a clean Blender 5.3 profile."""
+"""Run with the built extension enabled in a clean Blender profile."""
 
 import importlib
 import math
@@ -103,6 +103,8 @@ def coordinates(obj):
 
 cube = bpy.context.object
 assert cube.fdm_print.density == 15
+assert cube.fdm_print.fusion_method == "V1"
+assert set(addon.FDMSettings.bl_rna.properties["fusion_method"].enum_items.keys()) == {"V1", "BATCHES"}
 original = coordinates(cube)
 for density in (0, 15, 100):
     paths, layers, narrow = slice_object(cube, density=density, skirt=True)
@@ -459,6 +461,7 @@ for source, density in ((cube, 100), (cube, 15), (cube, 0), (bpy.data.objects["H
     if source == cube and density == 100:
         bead_hits = vertical_hits(mesh_tree(evaluated(live_obj)), 0.01, 0.02)
     source.fdm_print.fuse_bake = True
+    source.fdm_print.fusion_method = "BATCHES" if source == cube and density == 15 else "V1"
     assert bpy.ops.fdm_print.bake() == {"FINISHED"}
     fused = bpy.context.object
     assert live_obj.hide_get() and live_obj.hide_render and fused.matrix_world == live_obj.matrix_world

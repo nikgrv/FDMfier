@@ -1,10 +1,9 @@
 # FDMfier add-on for Blender
 
-
-Turn a closed mesh into an FDM-style replica with visible extrusion beads, infill,
-a seam, and optional supports, skirt, and brim. The add-on slices the evaluated
-mesh, including modifiers. A Geometry Nodes modifier turns its paths into
-renderable geometry.
+FDMfier makes a closed mesh look like it came off an FDM printer. Set the layer
+height, wall thickness, and infill, then add details like a seam, supports, or a
+little stringing. You can reveal the print layer by layer in Blender or bake it
+to an editable mesh for your render.
 
 ## Benchy renders
 
@@ -19,19 +18,27 @@ renderable geometry.
 
 ## Install
 
-Tested with Blender 5.3 on Apple Silicon. Windows x64, Linux x64/ARM64, and Intel Mac builds are untested. The Intel Mac package requires a custom Blender 5.3 build with Python 3.13. Blender 4.5 LTS was the last official Intel Mac release.
+Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64/ARM64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
 
-1. In Blender 5.3, open **Edit → Preferences → Add-ons**.
+1. In Blender, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
-   `FDMfier-x.x.x.zip`. Enable **FDMfier** if needed.
-   If you installed a development build, disable it before enabling V1. Blender
-   treats the new package ID as a separate extension.
+   `FDMfier-x.x.x.zip` from [GitHub Releases](https://github.com/nikgrv/FDMfier/releases). Enable **FDMfier** if needed.
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
    and choose **FDMfier → Generate**.
 
 The add-on places the preview over the source at the same scene scale and
 hides the source. Repair and baking also keep the result in place.
 Use **View → Frame Selected** for a closer look.
+
+## Roadmap
+
+- [ ] Speed up slicing and baking while keeping fine layer detail and good results with translucent materials.
+- [ ] Test installation, preview generation, and baking on Intel Macs.
+- [x] Confirm the installable ZIP works on Windows x64 with Blender 5.2.
+- [x] Support Blender 5.2 LTS.
+- [ ] Test the same workflow on Linux.
+- [ ] Make print animations easier with controls for timing the build from the first layer to the last.
+- [ ] Add more infill patterns, including gyroid and cubic.
 
 ## Use
 
@@ -92,12 +99,12 @@ extrusion width if generation reaches a geometry budget.
 
 ## Build and verify
 
-From the workspace root, using the Blender 5.3 executable as `blender`:
+From the workspace root, using Blender 5.2 or later as `blender`.
 
 ```sh
 blender -b --command extension build --source-dir ./fdm_print_preview --output-dir .
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.1.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.7.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 

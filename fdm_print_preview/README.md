@@ -9,11 +9,11 @@ renderable geometry.
 
 ## Install
 
-Tested with Blender 5.3 on Apple Silicon. Windows x64, Linux x64/ARM64, and Intel Mac builds are untested. The Intel Mac package requires a custom Blender 5.3 build with Python 3.13. Blender 4.5 LTS was the last official Intel Mac release.
+Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64/ARM64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
 
-1. In Blender 5.3, open **Edit → Preferences → Add-ons**.
+1. In Blender, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
-   `FDMfier-1.0.1.zip`. Enable **FDMfier** if needed.
+   `FDMfier-1.0.7.zip`. Enable **FDMfier** if needed.
    If you installed a development build, disable it before enabling V1. Blender
    treats the new package ID as a separate extension.
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
@@ -65,6 +65,9 @@ Use **View → Frame Selected** for a closer look.
   the evaluated bead surfaces and joins them with internal bonds. Assign a material
   to the baked mesh in Blender. Baking hides the source and live preview.
   **Show Live Preview** brings the preview back.
+- **Original Boolean (V1)** is the default fusion method and prioritizes the
+  detail of the original bake. **Four-Layer Boolean** fuses four layers at a
+  time before joining the batches to speed up baking.
 - When supports are enabled, **Overhang Angle** measures the minimum angle
   from vertical. Horizontal undersides are 90°. Tree branches share trunks
   that taper gradually toward the bed and widen as they carry more tips.
@@ -82,12 +85,12 @@ extrusion width if generation reaches a geometry budget.
 
 ## Build and verify
 
-From the workspace root, using the Blender 5.3 executable as `blender`:
+From the workspace root, using Blender 5.2 or later as `blender`:
 
 ```sh
 blender -b --command extension build --source-dir ./fdm_print_preview --output-dir .
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.1.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.7.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 

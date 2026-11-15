@@ -1,13 +1,13 @@
-schema_version = "1.0.1"
+schema_version = "1.0.3"
 id = "FDMfier"
-version = "1.0.1"
+version = "1.0.7"
 name = "FDMfier"
 tagline = "Turn solid meshes into layered FDM print previews"
 maintainer = "Nikita Goryainov - nik.grv"
 type = "add-on"
 tags = ["Modeling"]
 copyright = ["2026 Nikita Goryainov - nik.grv"]
-blender_version_min = "5.3.0"
+blender_version_min = "5.2.0"
 platforms = ["macos-arm64", "macos-x64", "windows-x64", "linux-x64", "linux-arm64"]
 license = ["SPDX:GPL-3.0-or-later"]
 wheels = [

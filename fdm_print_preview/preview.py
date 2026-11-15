@@ -368,6 +368,146 @@ def evaluated_fusion_paths(obj, modifier, graph):
         bpy.data.node_groups.remove(group)
 
 
+def integer_attribute(group, name):
+    node = group.nodes.new("GeometryNodeInputNamedAttribute")
+    node.data_type = "INT"
+    node.inputs["Name"].default_value = name
+    return node.outputs["Attribute"]
+
+
+def split_faces(group, geometry, key):
+    node = group.nodes.new("GeometryNodeSplitToInstances")
+    node.domain = "FACE"
+    group.links.new(geometry, node.inputs["Geometry"])
+    group.links.new(key, node.inputs["Group ID"])
+    return node.outputs["Instances"]
+
+
+def boolean_union(group, *operands):
+    node = group.nodes.new("GeometryNodeMeshBoolean")
+    node.operation = "UNION"
+    node.solver = "MANIFOLD"
+    for geometry in operands:
+        group.links.new(geometry, node.inputs["Mesh 2"])
+    return node.outputs["Mesh"]
+
+
+def strip_path_attributes(group, geometry, attributes, keep=()):
+    for name in attributes:
+        if name.startswith("fdm_") and name not in keep:
+            node = group.nodes.new("GeometryNodeRemoveAttribute")
+            node.inputs["Name"].default_value = name
+            group.links.new(geometry, node.inputs["Geometry"])
+            geometry = node.outputs["Geometry"]
+    return geometry
+
+
+def fusion_result(mesh, warnings):
+    if not mesh.polygons:
+        bpy.data.meshes.remove(mesh)
+        raise SliceError("Could not fuse the beads. " + " ".join(warnings[:1]))
+    for attribute in list(mesh.attributes):
+        if attribute.name.startswith("fdm_"):
+            mesh.attributes.remove(attribute)
+    return mesh
+
+
+def fuse_four_layers(scene, obj, core, graph, visible):
+    """Use separate dependency-graph objects to evaluate each four-layer union."""
+    temporary = []
+
+    def collection(name, parent):
+        result = bpy.data.collections.new(name)
+        temporary.append(result)
+        parent.children.link(result)
+        return result
+
+    def object_for(name, data, parent):
+        result = bpy.data.objects.new(name, data)
+        temporary.append(result)
+        parent.objects.link(result)
+        result.hide_render = True
+        result.hide_set(True)
+        return result
+
+    def geometry_group(name):
+        group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        temporary.append(group)
+        group.interface.new_socket(name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        return group, group.nodes.new("NodeGroupOutput")
+
+    try:
+        scratch = collection("FDMfier temporary fusion", scene.collection)
+        batches = collection("FDMfier four-layer batches", scratch)
+        empty = bpy.data.meshes.new("FDMfier temporary fusion")
+        temporary.append(empty)
+        bonds = object_for("FDMfier internal bonds", core, scratch) if core.polygons else None
+
+        group, output = geometry_group("FDMfier union four layers")
+        batch_input = group.interface.new_socket(name="Batch", in_out="INPUT", socket_type="NodeSocketInt")
+        batch = group.nodes.new("NodeGroupInput").outputs["Batch"]
+        operands = []
+        sources = [(obj, "fdm_path", "fdm_layer", 4)]
+        if bonds is not None:
+            sources.append((bonds, "fdm_bond_batch", "fdm_bond_batch", 12))
+        nodes, link = group.nodes, group.links.new
+        for source, path, layer, divisor in sources:
+            info = nodes.new("GeometryNodeObjectInfo")
+            info.transform_space = "ORIGINAL"
+            info.inputs["Object"].default_value = source
+
+            divide = nodes.new("FunctionNodeIntegerMath")
+            divide.operation = "DIVIDE_FLOOR"
+            divide.inputs[1].default_value = divisor
+            link(integer_attribute(group, layer), divide.inputs[0])
+            compare = nodes.new("FunctionNodeCompare")
+            compare.data_type = "INT"
+            compare.operation = "EQUAL"
+            link(divide.outputs[0], compare.inputs["A"])
+            link(batch, compare.inputs["B"])
+
+            select = nodes.new("GeometryNodeSeparateGeometry")
+            select.domain = "FACE"
+            link(info.outputs["Geometry"], select.inputs["Geometry"])
+            link(compare.outputs["Result"], select.inputs["Selection"])
+            geometry = strip_path_attributes(group, select.outputs["Selection"],
+                                             source.data.attributes.keys(), keep=(path,))
+            operands.append(split_faces(group, geometry, integer_attribute(group, path)))
+        link(boolean_union(group, *operands), output.inputs["Geometry"])
+
+        workers = []
+        for index in range((visible + 3) // 4):
+            worker = object_for("FDMfier layer batch", empty, batches)
+            modifier = worker.modifiers.new("Fuse four layers", "NODES")
+            modifier.node_group = group
+            getattr(modifier.properties.inputs, batch_input.identifier).value = index
+            workers.append((worker, modifier.name))
+
+        group, output = geometry_group("FDMfier join layer batches")
+        info = group.nodes.new("GeometryNodeCollectionInfo")
+        info.transform_space = "ORIGINAL"
+        info.inputs["Collection"].default_value = batches
+        info.inputs["Separate Children"].default_value = True
+        group.links.new(boolean_union(group, info.outputs["Instances"]), output.inputs["Geometry"])
+        joined = object_for("FDMfier fused batches", empty, scratch)
+        modifier = joined.modifiers.new("Join layer batches", "NODES")
+        modifier.node_group = group
+        joined.hide_set(False)
+        graph.update()
+
+        for worker, modifier_name in workers:
+            warnings = worker.evaluated_get(graph).modifiers[modifier_name].node_warnings
+            if warnings:
+                raise SliceError(f"Could not fuse a four-layer batch. {warnings[0].message}")
+        evaluated = joined.evaluated_get(graph)
+        warnings = [warning.message for warning in evaluated.modifiers[modifier.name].node_warnings]
+        return fusion_result(bpy.data.meshes.new_from_object(
+            evaluated, preserve_all_data_layers=True, depsgraph=graph,
+        ), warnings)
+    finally:
+        bpy.data.batch_remove(ids=temporary)
+
+
 def fuse_preview(obj, modifier, core, graph):
     """Boolean union individual solid beads and the internal bonding prisms."""
     group = modifier.node_group.copy()
@@ -376,24 +516,8 @@ def fuse_preview(obj, modifier, core, graph):
         nodes, links = group.nodes, group.links
         output = next(node for node in nodes if node.bl_idname == "NodeGroupOutput")
         beads = output.inputs["Geometry"].links[0].from_socket
-        for name in obj.data.attributes.keys():
-            if name.startswith("fdm_") and name != "fdm_path":
-                remove = nodes.new("GeometryNodeRemoveAttribute")
-                remove.inputs["Name"].default_value = name
-                links.new(beads, remove.inputs["Geometry"])
-                beads = remove.outputs["Geometry"]
-        attribute = nodes.new("GeometryNodeInputNamedAttribute")
-        attribute.data_type = "INT"
-        attribute.inputs["Name"].default_value = "fdm_path"
-        split = nodes.new("GeometryNodeSplitToInstances")
-        split.domain = "FACE"
-        links.new(beads, split.inputs["Geometry"])
-        links.new(attribute.outputs["Attribute"], split.inputs["Group ID"])
-
-        union = nodes.new("GeometryNodeMeshBoolean")
-        union.operation = "UNION"
-        union.solver = "MANIFOLD"
-        links.new(split.outputs["Instances"], union.inputs["Mesh"])
+        beads = strip_path_attributes(group, beads, obj.data.attributes.keys(), keep=("fdm_path",))
+        operands = [split_faces(group, beads, integer_attribute(group, "fdm_path"))]
         if core.polygons:
             core_obj = bpy.data.objects.new("FDMfier internal bonds", core)
             obj.users_collection[0].objects.link(core_obj)
@@ -403,26 +527,9 @@ def fuse_preview(obj, modifier, core, graph):
             info = nodes.new("GeometryNodeObjectInfo")
             info.transform_space = "RELATIVE"
             info.inputs["Object"].default_value = core_obj
-            bond_id = nodes.new("GeometryNodeInputNamedAttribute")
-            bond_id.data_type = "INT"
-            bond_id.inputs["Name"].default_value = "fdm_bond_batch"
-            bonds = nodes.new("GeometryNodeSplitToInstances")
-            bonds.domain = "FACE"
-            links.new(info.outputs["Geometry"], bonds.inputs["Geometry"])
-            links.new(bond_id.outputs["Attribute"], bonds.inputs["Group ID"])
-            links.new(bonds.outputs["Instances"], union.inputs["Mesh"])
-        links.new(union.outputs["Mesh"], output.inputs["Geometry"])
-
-        mesh, warnings = evaluate_bake_group(obj, modifier, group, graph)
-        if not mesh.polygons:
-            bpy.data.meshes.remove(mesh)
-            raise SliceError("Could not fuse the beads. " + " ".join(warnings[:1]))
-        # Boolean intersections can retain face attributes, but the baked
-        # output needs only its geometry and normals.
-        for attribute in list(mesh.attributes):
-            if attribute.name.startswith("fdm_"):
-                mesh.attributes.remove(attribute)
-        return mesh
+            operands.append(split_faces(group, info.outputs["Geometry"], integer_attribute(group, "fdm_bond_batch")))
+        links.new(boolean_union(group, *operands), output.inputs["Geometry"])
+        return fusion_result(*evaluate_bake_group(obj, modifier, group, graph))
     finally:
         bpy.data.node_groups.remove(group)
         if core_obj is not None:

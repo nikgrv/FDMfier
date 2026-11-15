@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import bmesh
 import bpy
+from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
 from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Matrix, Vector
@@ -60,6 +61,10 @@ class FDMSettings(PropertyGroup):
     build_plate_only: BoolProperty(
         name="Build Plate Only", description="Generate only supports rooted on the build plate"
     )
+    fusion_method: EnumProperty(name="Fusion Method", items=(
+        ("V1", "Original Boolean (V1)", "Slower, but produces better results for layer detail and translucency.", 1),
+        ("BATCHES", "Four-Layer Boolean", "Fuse evaluated beads in batches of four print layers", 0),
+    ), default="V1")
     fuse_bake: BoolProperty(name="Fuse for Translucency", default=False)
     density: FloatProperty(name="Infill (%)", default=15, min=0, max=100, precision=1)
     pattern: EnumProperty(name="Infill Pattern", items=(
@@ -375,13 +380,17 @@ class FDM_OT_bake(Operator):
                 height = getattr(inputs, ids["Layer Height"]).value
                 visible = min(obj["fdm_layers"], getattr(inputs, ids["Visible Layers"]).value)
                 graph = context.evaluated_depsgraph_get()
+                method = source.fdm_print.fusion_method
                 paths = preview.evaluated_fusion_paths(obj, modifier, graph)
                 try:
                     core = fusion.core_mesh(paths, width, height, visible)
                 finally:
                     bpy.data.meshes.remove(paths)
                 try:
-                    data = preview.fuse_preview(obj, modifier, core, graph)
+                    if method == "BATCHES":
+                        data = preview.fuse_four_layers(context.scene, obj, core, graph, visible)
+                    else:
+                        data = preview.fuse_preview(obj, modifier, core, graph)
                 finally:
                     bpy.data.meshes.remove(core)
             else:
@@ -700,6 +709,8 @@ class FDM_PT_preview(Panel):
                 box.operator("fdm_print.show")
             else:
                 box.prop(settings, "fuse_bake")
+                if settings.fuse_bake:
+                    box.prop(settings, "fusion_method")
                 box.operator("fdm_print.bake")
             box.operator("fdm_print.remove")
 
@@ -707,15 +718,30 @@ class FDM_PT_preview(Panel):
 CLASSES = (FDMSettings, FDM_OT_generate, FDM_OT_bake, FDM_OT_remove, FDM_OT_show, FDM_OT_repair, FDM_OT_lay_on_face, FDM_OT_auto_orient, FDM_PT_preview)
 
 
+@persistent
+def restore_fusion_method(_=None):
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or not obj.is_editable:
+            continue
+        settings = obj.fdm_print
+        if settings.is_property_set("fusion_method") and not settings.fusion_method:
+            settings.fusion_method = "V1"
+
+
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Object.fdm_print = PointerProperty(type=FDMSettings)
+    bpy.app.handlers.load_post.append(restore_fusion_method)
+    bpy.app.timers.register(restore_fusion_method)
 
 
 def unregister():
     if JOB is not None:
         JOB.cancel(bpy.context)
+    if bpy.app.timers.is_registered(restore_fusion_method):
+        bpy.app.timers.unregister(restore_fusion_method)
+    bpy.app.handlers.load_post.remove(restore_fusion_method)
     del bpy.types.Object.fdm_print
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
