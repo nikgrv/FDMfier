@@ -18,7 +18,7 @@ to an editable mesh for your render.
 
 ## Install
 
-Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64/ARM64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
+Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
 
 1. In Blender, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
@@ -102,9 +102,9 @@ extrusion width if generation reaches a geometry budget.
 From the workspace root, using Blender 5.2 or later as `blender`.
 
 ```sh
-blender -b --command extension build --source-dir ./fdm_print_preview --output-dir .
+blender -b --command extension build --source-dir ./fdmfier --output-dir .
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.7.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.8.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 
