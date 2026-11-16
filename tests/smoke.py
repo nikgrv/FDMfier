@@ -3,7 +3,7 @@
 import importlib
 import math
 import tempfile
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from pathlib import Path
 
 import bmesh
@@ -102,6 +102,7 @@ def coordinates(obj):
 
 
 cube = bpy.context.object
+assert math.isclose(cube.fdm_print.layer_height, 0.30, abs_tol=1e-7)
 assert cube.fdm_print.density == 15
 assert cube.fdm_print.fusion_method == "V1"
 assert set(addon.FDMSettings.bl_rna.properties["fusion_method"].enum_items.keys()) == {"V1", "BATCHES"}
@@ -187,8 +188,15 @@ support_width = slicer.units(0.4)
 support_height = slicer.units(0.2)
 roof = [[(-1000, -1000), (25000, -1000), (25000, 1000), (-1000, 1000)]]
 support_layers = [[] for _ in range(62)] + [roof]
-tree = list(slicer.support_paths(support_layers, support_width, support_height, True, 45,
-                                 lambda: False, lambda *_: None, {}))
+
+
+def support_paths(layers, tree, *, build_plate_only=False):
+    steps = slicer.support_steps(layers, support_width, support_height, tree, 45, {},
+                                build_plate_only=build_plate_only)
+    return [step for step in steps if isinstance(step, slicer.Path)]
+
+
+tree = support_paths(support_layers, True)
 trunk_widths = {}
 for path in tree:
     if path.closed:
@@ -206,13 +214,9 @@ for mode in ("STANDARD", "TREE"):
 shelf = [[(-300000, -300000), (300000, -300000), (300000, 300000), (-300000, 300000)]]
 blocked_layers = [shelf] * 3 + [[] for _ in range(12)] + [roof]
 for tree_mode in (False, True):
-    args = (blocked_layers, support_width, support_height, tree_mode, 45,
-            lambda: False, lambda *_: None, {})
-    assert list(slicer.support_paths(*args))
-    assert not list(slicer.support_paths(*args, build_plate_only=True))
-    assert any(path.layer == 0 for path in slicer.support_paths(
-        support_layers, support_width, support_height, tree_mode, 45,
-        lambda: False, lambda *_: None, {}, build_plate_only=True))
+    assert support_paths(blocked_layers, tree_mode)
+    assert not support_paths(blocked_layers, tree_mode, build_plate_only=True)
+    assert any(path.layer == 0 for path in support_paths(support_layers, tree_mode, build_plate_only=True))
 beam.fdm_print.support_angle = 45
 paths, _, _ = slice_object(beam)
 assert any(sag > 0 for path in paths if path.wall and path.layer == 45
@@ -277,12 +281,44 @@ with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
     assert addon.existing_preview(bpy.context.scene, cube) == obj
     cube.modifiers.remove(mod)
 
-    # Check the modal Esc dispatch without requiring a desktop event loop.
-    calls = []
-    stub = SimpleNamespace(cancel=lambda context: calls.append("cancel"),
-                           report=lambda kinds, message: calls.append(message))
-    assert addon.FDM_OT_generate.modal(stub, bpy.context, SimpleNamespace(type="ESC")) == {"CANCELLED"}
-    assert calls == ["cancel", "Print preview generation cancelled."]
+    # Drive the modal operator manually in background Blender. Cancel a staged
+    # result before publication, then run another job and publish it.
+    timer = object()
+    removed_timers = []
+    manager = SimpleNamespace(windows=(), event_timer_add=lambda *args, **kwargs: timer,
+                              event_timer_remove=removed_timers.append, modal_handler_add=lambda _: None)
+    modal_context = SimpleNamespace(scene=bpy.context.scene, active_object=obj, mode="OBJECT",
+                                    window=None, window_manager=manager)
+    operator = addon.FDM_OT_generate
+    timer_event = SimpleNamespace(type="TIMER")
+    reports = []
+    job = SimpleNamespace(report=lambda kinds, message: reports.append(message),
+                          prepare_snapshot=lambda _: operator.prepare_snapshot(job, bpy.context),
+                          finish=lambda _, result: operator.finish(job, bpy.context, result))
+    job.cancel = MethodType(operator.cancel, job)
+
+    for cancel in (True, False):
+        assert operator.invoke(job, modal_context, None) == {"RUNNING_MODAL"}
+        assert operator.modal(job, modal_context, timer_event) == {"RUNNING_MODAL"}
+        assert job.steps is not None and job.result is None
+        for _ in range(1000):
+            assert operator.modal(job, modal_context, timer_event) == {"RUNNING_MODAL"}
+            if job.result is not None:
+                break
+        assert job.progress == (0.96, "Creating Blender preview")
+        assert addon.existing_preview(bpy.context.scene, cube) == obj
+        if cancel:
+            esc = SimpleNamespace(type="ESC", value="PRESS")
+            assert operator.modal(job, modal_context, esc) == {"CANCELLED"}
+            assert reports[-1] == "Print preview generation cancelled."
+            assert addon.existing_preview(bpy.context.scene, cube) == obj
+        else:
+            assert operator.modal(job, modal_context, timer_event) == {"FINISHED"}
+            obj = bpy.context.object
+            assert addon.existing_preview(bpy.context.scene, cube) == obj
+            assert live(obj, "Visible Layers").value == 10
+        assert addon.JOB is None and job.steps is None
+    assert removed_timers == [timer, timer]
     config = SimpleNamespace(**{name: getattr(cube.fdm_print, name) for name in addon.SETTING_NAMES})
     vertices, faces, _, _ = addon.evaluated_input(bpy.context, cube, config)
     try:
@@ -515,6 +551,27 @@ for source, density in ((cube, 100), (cube, 15), (cube, 0), (bpy.data.objects["H
         assert not vertical_hits(mesh_tree(fused.data), 0, 0)
     assert bpy.ops.fdm_print.show() == {"FINISHED"}
     assert not live_obj.hide_get() and fused.hide_get() and fused.hide_render
+
+# Bake a partially revealed preview with live imperfections using both solvers.
+activate(cube)
+cube.fdm_print.density = 15
+assert bpy.ops.fdm_print.generate() == {"FINISHED"}
+live_obj = bpy.context.object
+live(live_obj, "Visible Layers").value = 13
+live(live_obj, "Imperfections").value = 0.8
+bpy.context.view_layer.update()
+reveal_height = 13 * live(live_obj, "Layer Height").value
+cube.fdm_print.fuse_bake = True
+for method in ("V1", "BATCHES"):
+    cube.fdm_print.fusion_method = method
+    assert bpy.ops.fdm_print.bake() == {"FINISHED"}
+    result = bpy.context.object
+    assert result["fdm_baked"] and len(result.data.polygons) > 0
+    assert result.matrix_world == live_obj.matrix_world and live_obj.hide_get()
+    assert max(vertex.co.z for vertex in result.data.vertices) <= reveal_height * 1.02
+    assert bpy.ops.fdm_print.show() == {"FINISHED"}
+    assert bpy.context.object == live_obj and not live_obj.hide_get()
+cube.fdm_print.fusion_method = "V1"
 
 tube = bpy.data.objects["Hollow cylinder"]
 activate(tube)

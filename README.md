@@ -21,8 +21,9 @@ to an editable mesh for your render.
 Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
 
 1. In Blender, open **Edit → Preferences → Add-ons**.
-2. Open the menu in the top right, select **Install from Disk**, and choose
-   `FDMfier-x.x.x.zip` from [GitHub Releases](https://github.com/nikgrv/FDMfier/releases). Enable **FDMfier** if needed.
+2. Open the menu in the top right and select **Install from Disk**. Choose
+   either the unified ZIP or the ZIP for your platform. Enable **FDMfier** if
+   needed. [GitHub Releases](https://github.com/nikgrv/FDMfier/releases)
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
    and choose **FDMfier → Generate**.
 
@@ -77,6 +78,7 @@ Use **View → Frame Selected** for a closer look.
 - Infill defaults to **15%**. Fused baking joins adjacent wall tracks into a
   shell while retaining the air spaces in sparse infill.
 - **Bake to Mesh** creates an editable mesh at the current reveal height.
+  The sidebar displays a status message before Blender pauses to fuse the mesh.
   Enable **Fuse for Translucency** before baking to join beads while preserving
   rounded layer ridges, top grooves, and infill cavities. Fused baking keeps
   the evaluated bead surfaces and joins them with internal bonds. Assign a material
@@ -102,16 +104,17 @@ extrusion width if generation reaches a geometry budget.
 From the workspace root, using Blender 5.2 or later as `blender`.
 
 ```sh
-blender -b --command extension build --source-dir ./fdmfier --output-dir .
+blender -b --command extension build --source-dir ./fdmfier --output-dir . --split-platforms
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.8.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.9-macos_arm64.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 
-The package bundles CPython 3.13 wheels for
-[pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/). Third-party license
-notices are included inside the wheel.
+The install command shows the Apple Silicon ZIP as an example. Omit
+`--split-platforms` from the build command to create the unified ZIP. The
+packages bundle CPython 3.13 wheels for pyclipper 1.4.0, with third-party license
+notices inside the wheels. [pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/)
 
 ## V1 release
 
-See the [release notes and platform testing checklist](RELEASE_NOTES.md).
+See the [1.0.9 release notes](RELEASE_NOTES_1.0.9.md) and the [V1 roadmap and platform testing checklist](RELEASE_NOTES.md).

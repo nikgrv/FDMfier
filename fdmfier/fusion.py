@@ -4,7 +4,6 @@
 """Fuse the evaluated beads around an internal mesh of bonding surfaces."""
 
 from collections import defaultdict
-from math import ceil
 
 import bpy
 import numpy as np

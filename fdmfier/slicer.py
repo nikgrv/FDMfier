@@ -95,7 +95,7 @@ def check_cancel(cancelled):
         raise SliceError("Print preview generation cancelled.")
 
 
-def sections(vertices, triangles, height, cancelled, progress):
+def section_steps(vertices, triangles, height):
     top = max(vertex[2] for vertex in vertices)
     count = ceil(top / height - 1e-9)
     if count < 1 or count > MAX_LAYERS:
@@ -109,8 +109,7 @@ def sections(vertices, triangles, height, cancelled, progress):
     intersections = 0
     for number, triangle in enumerate(triangles):
         if number % 128 == 0:
-            check_cancel(cancelled)
-            progress(0.05 + 0.19 * number / len(triangles), "Slicing mesh")
+            yield 0.05 + 0.19 * number / len(triangles), "Slicing mesh"
         low, middle, high = sorted(triangle, key=lambda vertex: vertices[vertex][2])
         first = bisect_left(levels, vertices[low][2])
         last = bisect_left(levels, vertices[high][2])
@@ -118,6 +117,8 @@ def sections(vertices, triangles, height, cancelled, progress):
         if intersections > MAX_INTERSECTIONS:
             raise SliceError(f"Slicing exceeded {MAX_INTERSECTIONS:,} triangle-plane intersections. Increase Layer Height or use a lower-resolution remesh.")
         for index in range(first, last):
+            if index > first and index % 256 == 0:
+                yield 0.05 + 0.19 * number / len(triangles), "Slicing mesh"
             z = levels[index]
             edge = (middle, high) if z >= vertices[middle][2] else (low, middle)
             pair = []
@@ -133,8 +134,7 @@ def sections(vertices, triangles, height, cancelled, progress):
             segments[index].append(tuple(pair))
     result = []
     for index, layer in enumerate(segments):
-        check_cancel(cancelled)
-        progress(0.24 + 0.11 * index / count, "Joining layer contours")
+        yield 0.24 + 0.11 * index / count, "Joining layer contours"
         result.append(stitch(layer, coordinates[index], index + 1))
     return result
 
@@ -241,7 +241,7 @@ def inside(point, polygons):
     return winding != 0
 
 
-def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_faces, *, build_plate_only=False, tip_spacing=0):
+def support_steps(layers, width, height, tree, angle, flat_faces, *, build_plate_only=False, tip_spacing=0):
     """Route sampled overhangs downward, anchoring routes to the bed or lower shelves."""
     natural_spacing = max(width * 6, units(2))
     spacing = max(natural_spacing, tip_spacing)
@@ -251,14 +251,13 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
     forbidden = []
     count = len(layers)
     for index, layer in enumerate(layers):
-        check_cancel(cancelled)
-        progress(0.74 + 0.03 * index / count, "Checking support clearance")
+        yield 0.74 + 0.03 * index / count, "Checking support clearance"
         forbidden.append(offset(layer, clearance))
     tips = defaultdict(set)
     samples = 0
     for index in range(2, count):
-        check_cancel(cancelled)
-        progress(0.77 + 0.05 * index / count, "Finding overhangs")
+        update = 0.77 + 0.05 * index / count, "Finding overhangs"
+        yield update
         overhang = polygon_op(layers[index], offset(layers[index - 1], allowance), clip.CT_DIFFERENCE)
         overhang = polygon_op(overhang + flat_faces.get(index, []))
         overhang = polygon_op(overhang, forbidden[index - 2], clip.CT_DIFFERENCE)
@@ -272,7 +271,12 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
             samples += len(xs) * len(ys)
             if samples > MAX_SUPPORT_SAMPLES:
                 raise SliceError(f"Support sampling exceeded {MAX_SUPPORT_SAMPLES:,} candidates at layer {index + 1}. Increase Support Spacing or Layer Height.")
-            candidates = [(x, y) for x in xs for y in ys if inside((x, y), [polygon]) and inside((x, y), overhang)]
+            candidates = []
+            for number, point in enumerate((x, y) for x in xs for y in ys):
+                if number and number % 256 == 0:
+                    yield update
+                if inside(point, [polygon]) and inside(point, overhang):
+                    candidates.append(point)
             if not candidates:
                 # An interior hatch segment supplies a sample for narrow islands.
                 local = polygon_op(overhang, [polygon], clip.CT_INTERSECTION)
@@ -281,7 +285,9 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
                     line = max(lines, key=lambda line: abs(line[-1][0] - line[0][0]))
                     a, b = line[0], line[-1]
                     candidates = [((a[0] + b[0]) // 2, (a[1] + b[1]) // 2)]
-            for point in candidates:
+            for number, point in enumerate(candidates):
+                if number and number % 256 == 0:
+                    yield update
                 if inside(point, overhang) and not inside(point, forbidden[index - 2]):
                     tips[index - 2].add(point)
 
@@ -290,8 +296,8 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
     active = {}
     incoming_radii = {}
     for index in range(count - 1, -1, -1):
-        check_cancel(cancelled)
-        progress(0.82 + 0.06 * (count - 1 - index) / count, "Routing supports")
+        update = 0.82 + 0.06 * (count - 1 - index) / count, "Routing supports"
+        yield update
         for point in tips[index]:
             active[point] = active.get(point, 0) + 1
         samples += len(active)
@@ -300,7 +306,9 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
         parents = {}
         parent_radii = {}
         step = min(height, width // 2)
-        for point, load in sorted(active.items()):
+        for number, (point, load) in enumerate(sorted(active.items())):
+            if number and number % 128 == 0:
+                yield update
             branch_radius = radius
             if tree and point in incoming_radii:
                 previous = incoming_radii[point]
@@ -343,11 +351,13 @@ def support_paths(layers, width, height, tree, angle, cancelled, progress, flat_
 
     rooted = set()
     for index, layer in enumerate(routes):
-        check_cancel(cancelled)
-        progress(0.88 + 0.06 * index / count, "Building support paths")
+        update = 0.88 + 0.06 * index / count, "Building support paths"
+        yield update
         next_rooted = set()
         circles = []
-        for point, (parent, r) in layer.items():
+        for number, (point, (parent, r)) in enumerate(layer.items()):
+            if number and number % 128 == 0:
+                yield update
             if index and parent is not None and parent not in rooted:
                 continue
             next_rooted.add(point)
@@ -399,7 +409,7 @@ def web_paths(layer, index, width):
         yield Path(points, index, WEB, activation=threshold)
 
 
-def flat_overhangs(vertices, triangles, layers, layer_height):
+def flat_overhang_steps(vertices, triangles, layers, layer_height):
     """Include horizontal undersides even when the slope allowance covers them."""
     from bisect import bisect_right
 
@@ -407,7 +417,9 @@ def flat_overhangs(vertices, triangles, layers, layer_height):
     midpoints = [(i * layer_height + min((i + 1) * layer_height, top)) / 2 + 1e-8
                  for i in range(len(layers))]
     faces = defaultdict(list)
-    for triangle in triangles:
+    for number, triangle in enumerate(triangles):
+        if number % 128 == 0:
+            yield 0.73 + 0.009 * number / len(triangles), "Checking horizontal overhangs"
         a, b, c = (vertices[i] for i in triangle)
         if max(a[2], b[2], c[2]) - min(a[2], b[2], c[2]) > 1e-6:
             continue
@@ -419,9 +431,12 @@ def flat_overhangs(vertices, triangles, layers, layer_height):
             faces[index].append(polygon if clip.Orientation(polygon) else polygon[::-1])
     # Slice occupancy distinguishes undersides from tops without relying on
     # mesh winding, including for objects with mirrored transforms.
-    return {i: polygon_op(polygon_op(polygons, layers[i], clip.CT_INTERSECTION),
-                          layers[i - 1], clip.CT_DIFFERENCE)
-            for i, polygons in faces.items()}
+    result = {}
+    for i, polygons in faces.items():
+        yield 0.739, "Checking horizontal overhangs"
+        result[i] = polygon_op(polygon_op(polygons, layers[i], clip.CT_INTERSECTION),
+                               layers[i - 1], clip.CT_DIFFERENCE)
+    return result
 
 
 def simplify_wall(contour, tolerance):
@@ -455,8 +470,9 @@ def simplify_wall(contour, tolerance):
     return contour
 
 
-def generate(vertices, triangles, settings, cancelled=lambda: False, progress=lambda factor, label: None):
-    layers = sections(vertices, triangles, settings.layer_height, cancelled, progress)
+def generate_steps(vertices, triangles, settings):
+    """Yield progress between slicing steps and return the finished paths."""
+    layers = yield from section_steps(vertices, triangles, settings.layer_height)
     width = max(1, units(settings.width))
     height = units(settings.layer_height)
     paths = []
@@ -479,10 +495,9 @@ def generate(vertices, triangles, settings, cancelled=lambda: False, progress=la
             raise SliceError(f"Preview exceeded {MAX_POINTS:,} path vertices at layer {path.layer + 1}. {adjustment}")
         paths.append(path)
 
-    path_share = 0.39 if settings.supports != "OFF" else 0.59
+    path_share = 0.38 if settings.supports != "OFF" else 0.59
     for index, layer in enumerate(layers):
-        check_cancel(cancelled)
-        progress(0.35 + path_share * index / len(layers), "Building walls and infill")
+        yield 0.35 + path_share * index / len(layers), "Building walls and infill"
         if not layer:
             continue
         if index and index % 3 == 1:
@@ -525,14 +540,16 @@ def generate(vertices, triangles, settings, cancelled=lambda: False, progress=la
                 add(Path(line, index, INFILL, closed, top_skin=top_skin))
 
     if settings.supports != "OFF":
-        flats = flat_overhangs(vertices, triangles, layers, settings.layer_height)
-        for path in support_paths(layers, width, height, settings.supports == "TREE",
+        flats = yield from flat_overhang_steps(vertices, triangles, layers, settings.layer_height)
+        for item in support_steps(layers, width, height, settings.supports == "TREE",
                                   min(89.9, getattr(settings, "support_angle", 45)),
-                                  cancelled, progress, flats, build_plate_only=settings.build_plate_only,
+                                  flats, build_plate_only=settings.build_plate_only,
                                   tip_spacing=units(settings.support_spacing)):
-            add(path)
-    progress(0.94, "Finishing extrusion paths")
-    check_cancel(cancelled)
+            if isinstance(item, Path):
+                add(item)
+            else:
+                yield item
+    yield 0.94, "Finishing extrusion paths"
     brim_extent = 0
     if settings.brim and layers[0]:
         # Start just inside tangency with the first perimeter and slightly
@@ -541,7 +558,7 @@ def generate(vertices, triangles, settings, cancelled=lambda: False, progress=la
         spacing = width * 0.96
         loops = max(1, ceil((units(settings.brim_width) - first - width / 2) / spacing) + 1)
         for loop in range(loops):
-            check_cancel(cancelled)
+            yield 0.94, "Building brim"
             distance = round(first + loop * spacing)
             for outline in offset(layers[0], distance):
                 if clip.Orientation(outline):
@@ -549,6 +566,7 @@ def generate(vertices, triangles, settings, cancelled=lambda: False, progress=la
             brim_extent = distance + width / 2
     if settings.skirt and layers[0]:
         for loop in range(settings.skirt_loops):
+            yield 0.94, "Building skirt"
             distance = round(brim_extent + units(settings.skirt_offset) + (loop + 0.5) * width)
             for outline in offset(layers[0], distance):
                 if clip.Orientation(outline):
@@ -556,3 +574,18 @@ def generate(vertices, triangles, settings, cancelled=lambda: False, progress=la
     if not any(path.feature == WALL for path in paths):
         raise SliceError("No walls fit this mesh. Reduce Extrusion Width or increase Target Size.")
     return paths, len(layers), narrow
+
+
+def generate(vertices, triangles, settings, cancelled=lambda: False, progress=lambda factor, label: None):
+    """Run the same slicing steps synchronously for scripts and background Blender."""
+    steps = generate_steps(vertices, triangles, settings)
+    try:
+        while True:
+            check_cancel(cancelled)
+            try:
+                update = next(steps)
+            except StopIteration as complete:
+                return complete.value
+            progress(*update)
+    finally:
+        steps.close()

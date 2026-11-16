@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "FDMfier"
-version = "1.0.8"
+version = "1.0.9"
 name = "FDMfier"
 tagline = "Turn solid meshes into layered FDM print previews"
 maintainer = "Nikita Goryainov - nik.grv"

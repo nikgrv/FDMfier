@@ -3,15 +3,12 @@
 
 """FDMfier Blender extension."""
 
-from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from math import ceil
-from threading import Event
+from time import perf_counter
 from types import SimpleNamespace
 
 import bmesh
 import bpy
-from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
 from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Matrix, Vector
@@ -42,7 +39,7 @@ def redraw_preview_panels(context):
 
 class FDMSettings(PropertyGroup):
     size: FloatProperty(name="Simulated Print Size (mm)", description="Longest dimension used for slicing detail. The preview matches the source size in the scene", default=100, min=1, max=1000)
-    layer_height: FloatProperty(name="Layer Height (mm)", default=0.20, min=0.03, max=5, precision=3)
+    layer_height: FloatProperty(name="Layer Height (mm)", default=0.30, min=0.03, max=5, precision=3)
     width: FloatProperty(name="Extrusion Width (mm)", default=0.45, min=0.05, max=10, precision=3)
     walls: IntProperty(name="Wall Lines", default=2, min=1, max=12)
     skins: IntProperty(name="Top Layers", default=4, min=0, max=30)
@@ -289,52 +286,46 @@ class FDM_OT_generate(Operator):
         global JOB
         self.source = active_source(context)
         self.scene = context.scene
-        self.stop = Event()
-        self.updates = deque(maxlen=1)
         self.progress = (0.0, "Preparing mesh")
-        self.future = None
-        self.executor = None
-        self.ready_to_publish = False
-        self.timer = context.window_manager.event_timer_add(0.15, window=context.window)
+        self.steps = None
+        self.result = None
+        self.timer = context.window_manager.event_timer_add(0.02, window=context.window)
         context.window_manager.modal_handler_add(self)
         JOB = self
         redraw_preview_panels(context)
         return {"RUNNING_MODAL"}
 
-    def start_worker(self, context):
-        self.prepare_snapshot(context)
-        settings = SimpleNamespace(**{name: getattr(self.settings, name) for name in SETTING_NAMES})
-        updates = self.updates
-
-        def progress(factor, label):
-            updates.append((factor, label))
-
-        self.executor = ThreadPoolExecutor(max_workers=1)
-        self.future = self.executor.submit(slicer.generate, self.vertices, self.faces,
-                                           settings, self.stop.is_set, progress)
-
     def modal(self, context, event):
-        if event.type == "ESC":
+        if JOB is not self:
+            return {"CANCELLED"}
+        if event.type == "ESC" and event.value == "PRESS":
             self.cancel(context)
             self.report({"INFO"}, "Print preview generation cancelled.")
             return {"CANCELLED"}
         if event.type != "TIMER":
             return {"PASS_THROUGH"}
         try:
-            if self.future is None:
-                self.start_worker(context)
-            elif self.future.done():
-                result = self.future.result()
-                if self.ready_to_publish:
-                    status = self.finish(context, result)
-                    self.cancel(context)
-                    return status
-                # Give Blender a redraw before publishing the mesh on the main thread.
-                self.ready_to_publish = True
+            if self.result is not None:
+                status = self.finish(context, self.result)
+                self.cancel(context)
+                return status
+            if self.steps is None:
+                self.prepare_snapshot(context)
+                self.steps = slicer.generate_steps(self.vertices, self.faces, self.settings)
+                return {"RUNNING_MODAL"}
+
+            previous = self.progress
+            deadline = perf_counter() + 0.015
+            try:
+                while True:
+                    self.progress = next(self.steps)
+                    if perf_counter() >= deadline:
+                        break
+            except StopIteration as complete:
+                self.result = complete.value
+                # Let Blender redraw before creating and swapping the mesh.
                 self.progress = (0.96, "Creating Blender preview")
-                redraw_preview_panels(context)
-            elif self.updates and self.progress != self.updates[-1]:
-                self.progress = self.updates[-1]
+            if self.progress != previous:
                 redraw_preview_panels(context)
         except Exception as error:
             self.cancel(context)
@@ -345,9 +336,10 @@ class FDM_OT_generate(Operator):
     def cancel(self, context):
         global JOB
         if JOB is self:
-            self.stop.set()
-            if self.executor is not None:
-                self.executor.shutdown(wait=False, cancel_futures=True)
+            if self.steps is not None:
+                self.steps.close()
+            self.steps = self.result = None
+            self.vertices = self.faces = self.settings = None
             context.window_manager.event_timer_remove(self.timer)
             JOB = None
             redraw_preview_panels(context)
@@ -370,6 +362,7 @@ class FDM_OT_bake(Operator):
         obj = existing_preview(context.scene, source)
         fused = source.fdm_print.fuse_bake
         try:
+            graph = context.evaluated_depsgraph_get()
             if fused:
                 modifier = node_modifier(obj)
                 if modifier is None:
@@ -379,46 +372,104 @@ class FDM_OT_bake(Operator):
                 width = getattr(inputs, ids["Bead Width"]).value
                 height = getattr(inputs, ids["Layer Height"]).value
                 visible = min(obj["fdm_layers"], getattr(inputs, ids["Visible Layers"]).value)
-                graph = context.evaluated_depsgraph_get()
-                method = source.fdm_print.fusion_method
                 paths = preview.evaluated_fusion_paths(obj, modifier, graph)
                 try:
                     core = fusion.core_mesh(paths, width, height, visible)
                 finally:
                     bpy.data.meshes.remove(paths)
                 try:
-                    if method == "BATCHES":
+                    if source.fdm_print.fusion_method == "BATCHES":
                         data = preview.fuse_four_layers(context.scene, obj, core, graph, visible)
                     else:
                         data = preview.fuse_preview(obj, modifier, core, graph)
                 finally:
                     bpy.data.meshes.remove(core)
             else:
-                graph = context.evaluated_depsgraph_get()
                 data = bpy.data.meshes.new_from_object(obj.evaluated_get(graph),
                                                       preserve_all_data_layers=True, depsgraph=graph)
                 if not data.polygons:
                     bpy.data.meshes.remove(data)
                     raise slicer.SliceError("Reveal at least one layer before baking.")
+            return self.finish(context, source, obj, data, fused)
         except (ValueError, RuntimeError, slicer.clip.ClipperException) as error:
             self.report({"WARNING"}, str(error))
             return {"CANCELLED"}
 
-        data.materials.clear()
+    def invoke(self, context, event):
+        global JOB
+        source = active_source(context)
+        if not source.fdm_print.fuse_bake or bpy.app.background:
+            return self.execute(context)
+
+        self.source = source
+        self.obj = existing_preview(context.scene, source)
+        self.scene = context.scene
+        self.window = context.window
+        self.progress = (None, "Baking fused mesh…")
+        self.timer = context.window_manager.event_timer_add(0.15, window=self.window)
+        context.window_manager.modal_handler_add(self)
+        JOB = self
+        self.window.cursor_modal_set("WAIT")
+        redraw_preview_panels(context)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if JOB is not self:
+            return {"CANCELLED"}
+        if event.type == "ESC" and event.value == "PRESS":
+            self.cancel(context)
+            self.report({"INFO"}, "Fused bake cancelled.")
+            return {"CANCELLED"}
+        if event.type != "TIMER" or not self.timer.time_duration:
+            return {"PASS_THROUGH"}
+        try:
+            if (context.scene != self.scene or active_source(context) != self.source
+                    or existing_preview(self.scene, self.source) != self.obj
+                    or self.obj.mode != "OBJECT" or self.source.mode != "OBJECT"
+                    or context.view_layer.objects.get(self.obj.name) != self.obj):
+                self.report({"WARNING"}, "The source or preview changed before baking.")
+                return {"CANCELLED"}
+            # Let the sidebar draw the message before the blocking Boolean runs.
+            return self.execute(context)
+        finally:
+            self.cancel(context)
+
+    def cancel(self, context):
+        global JOB
+        if JOB is self:
+            context.window_manager.event_timer_remove(self.timer)
+            JOB = None
+            if self.window in context.window_manager.windows[:]:
+                self.window.cursor_modal_restore()
+            redraw_preview_panels(context)
+
+    def finish(self, context, source, obj, data, fused):
         label = "Fused FDM" if fused else "Baked FDM"
-        baked = bpy.data.objects.new(f"{source.name} • {label}", data)
-        baked["fdm_baked"] = True
-        obj.users_collection[0].objects.link(baked)
-        baked.matrix_world = obj.matrix_world.copy()
-        baked.fdm_print.source = source
-        context.view_layer.update()
+        select_result = context.active_object in (source, obj)
+        baked = None
+        try:
+            data.materials.clear()
+            data.use_fake_user = False
+            baked = bpy.data.objects.new(f"{source.name} • {label}", data)
+            baked["fdm_baked"] = True
+            obj.users_collection[0].objects.link(baked)
+            baked.matrix_world = obj.matrix_world.copy()
+            baked.fdm_print.source = source
+            context.view_layer.update()
+        except Exception:
+            if baked is None:
+                bpy.data.meshes.remove(data)
+            else:
+                remove_object(baked)
+            raise
         hide_previous_bakes(context.view_layer, source, exclude=baked)
         set_preview_hidden(obj, True)
         hide_source(context, source)
-        for selected in context.selected_objects:
-            selected.select_set(False)
-        baked.select_set(True)
-        context.view_layer.objects.active = baked
+        if select_result:
+            for selected in context.selected_objects:
+                selected.select_set(False)
+            baked.select_set(True)
+            context.view_layer.objects.active = baked
         return {"FINISHED"}
 
 
@@ -642,8 +693,11 @@ class FDM_PT_preview(Panel):
             factor, stage = JOB.progress
             box = layout.box()
             box.label(text=stage)
-            box.progress(factor=factor, type="BAR", text=f"{factor:.0%}")
-            box.label(text="Esc to cancel")
+            if factor is not None:
+                box.progress(factor=factor, type="BAR", text=f"{factor:.0%}")
+                box.label(text="Esc to cancel")
+            else:
+                box.label(text="Blender pauses during baking")
         if context.mode == "EDIT_MESH" and orientation_source(context) is not None:
             layout.operator("fdm_print.lay_on_face")
             layout.operator("fdm_print.auto_orient")
@@ -718,30 +772,15 @@ class FDM_PT_preview(Panel):
 CLASSES = (FDMSettings, FDM_OT_generate, FDM_OT_bake, FDM_OT_remove, FDM_OT_show, FDM_OT_repair, FDM_OT_lay_on_face, FDM_OT_auto_orient, FDM_PT_preview)
 
 
-@persistent
-def restore_fusion_method(_=None):
-    for obj in bpy.data.objects:
-        if obj.type != "MESH" or not obj.is_editable:
-            continue
-        settings = obj.fdm_print
-        if settings.is_property_set("fusion_method") and not settings.fusion_method:
-            settings.fusion_method = "V1"
-
-
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Object.fdm_print = PointerProperty(type=FDMSettings)
-    bpy.app.handlers.load_post.append(restore_fusion_method)
-    bpy.app.timers.register(restore_fusion_method)
 
 
 def unregister():
     if JOB is not None:
         JOB.cancel(bpy.context)
-    if bpy.app.timers.is_registered(restore_fusion_method):
-        bpy.app.timers.unregister(restore_fusion_method)
-    bpy.app.handlers.load_post.remove(restore_fusion_method)
     del bpy.types.Object.fdm_print
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
