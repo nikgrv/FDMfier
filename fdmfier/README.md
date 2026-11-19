@@ -9,7 +9,7 @@ renderable geometry.
 
 ## Install
 
-Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
+Requires Blender 5.2 LTS or later. Version 1.0.10 was tested with Blender 5.3 on Apple Silicon. An earlier release was tested with Blender 5.2 on Windows x64. Runtime testing of 1.0.10 on Windows, Linux, and Intel Mac builds is pending. Intel Macs require a custom Blender build with Python 3.13.
 
 1. In Blender, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
@@ -35,8 +35,14 @@ Use **View → Frame Selected** for a closer look.
   mesh by overhang area, bed contact, and build height. Both actions rotate
   and place the source object. Regenerate an existing preview after reorienting.
 - Set layer height, extrusion width, wall lines, and separate top and bottom
-  layer counts. Choose alternating, parallel, or concentric surface paths.
-  Sparse infill also offers grid, triangles, concentric, and honeycomb.
+  layer counts. Surface patterns include alternating lines, parallel lines,
+  concentric, Hilbert Curve, Archimedean Chords, and Octagram Spiral.
+  Sparse infill also offers Grid, Triangles, Concentric, Honeycomb, Gyroid,
+  Cubic, Cross 3D, and Adaptive Cubic.
+- Gyroid, Cubic, and Cross 3D change with slice height. Adaptive Cubic uses
+  smaller cells near the model’s surfaces and larger cells inside. Its density
+  sets the finest cell spacing. Cross 3D uses FDMfier’s own fractal construction,
+  so its paths can differ from Cura’s. Infill at 100% uses solid alternating lines.
 - The vertex estimate uses source bounds, slice settings, and bead resolution.
   Complex contours and support routing can make the actual count differ.
   **Repair / Remesh Copy** welds vertices and fills holes on a copy. If that
@@ -91,7 +97,7 @@ From the workspace root, using Blender 5.2 or later as `blender`:
 ```sh
 blender -b --command extension build --source-dir ./fdmfier --output-dir . --split-platforms
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.9-macos_arm64.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.10-macos_arm64.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 

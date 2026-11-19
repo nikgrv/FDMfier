@@ -1,120 +1,109 @@
-# FDMfier add-on for Blender
+<div align="center">
+
+# FDMfier
+
+FDM print previews for Blender, with visible layers, patterned infill, and adjustable imperfections.
+
+[![Latest release](https://img.shields.io/github/v/release/nikgrv/FDMfier?label=release&color=2563eb)](https://github.com/nikgrv/FDMfier/releases/latest)
+[![Blender 5.2 or later](https://img.shields.io/badge/Blender-5.2%2B-e87d0d?logo=blender&logoColor=white)](#download)
+[![GitHub downloads](https://img.shields.io/github/downloads/nikgrv/FDMfier/total?label=GitHub%20downloads&color=475569)](https://github.com/nikgrv/FDMfier/releases)
+[![GPL v3 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-475569)](LICENSE)
+
+**[Download 1.0.10](https://github.com/nikgrv/FDMfier/releases/tag/v1.0.10)** · **[Blender Extensions](https://extensions.blender.org/add-ons/fdmfier/)** · **[Usage guide](docs/USAGE.md)** · **[Changelog](CHANGELOG.md)**
+
+</div>
+
+![Blue Benchy rendered with FDMfier, showing rounded layer lines and a patterned top surface](docs/images/benchy_blue_100.png)
 
 FDMfier makes a closed mesh look like it came off an FDM printer. Set the layer
-height, wall thickness, and infill, then add details like a seam, supports, or a
-little stringing. You can reveal the print layer by layer in Blender or bake it
-to an editable mesh for your render.
+height, walls, and infill, then add a seam, supports, or a little stringing.
+Reveal the print layer by layer or bake it to an editable mesh for your render.
+The preview keeps the source model’s size and position.
 
-## Benchy renders
+## Download
 
-![Blue Benchy with visible layer lines](docs/images/benchy_blue_100.png)
-*Blue filament with visible layer lines.*
+Requires **Blender 5.2 LTS or later**. Choose the unified ZIP or the package for
+your system. Use the extension ZIP when installing through Blender.
 
-![Blue Benchy with simulated print imperfections and stringing](docs/images/benchy_blue_100_imp.png)
-*Blue filament with simulated imperfections.*
+| Package | Download | Testing |
+| --- | --- | --- |
+| Unified | [FDMfier-1.0.10.zip](https://github.com/nikgrv/FDMfier/releases/download/v1.0.10/FDMfier-1.0.10.zip) | Apple Silicon with Blender 5.3 |
+| Apple Silicon | [macOS ARM64](https://github.com/nikgrv/FDMfier/releases/download/v1.0.10/FDMfier-1.0.10-macos_arm64.zip) | 1.0.10 tested with Blender 5.3 |
+| Windows | [Windows x64](https://github.com/nikgrv/FDMfier/releases/download/v1.0.10/FDMfier-1.0.10-windows_x64.zip) | Earlier release tested with Blender 5.2; 1.0.10 testing pending |
+| Linux | [Linux x64](https://github.com/nikgrv/FDMfier/releases/download/v1.0.10/FDMfier-1.0.10-linux_x64.zip) | Untested |
+| Intel Mac | [macOS x64](https://github.com/nikgrv/FDMfier/releases/download/v1.0.10/FDMfier-1.0.10-macos_x64.zip) | Untested; requires a custom Blender build with Python 3.13 |
 
-![Transparent Benchy with visible extrusion layers](docs/images/benchy_transparent_100.png)
-*Transparent material with visible extrusion layers.*
+1. Open **Edit → Preferences → Add-ons**, open the menu, and choose **Install from Disk**.
+2. Select the downloaded ZIP and enable **FDMfier** if needed.
+3. Select a solid mesh, open the 3D Viewport sidebar with **N**, and choose **FDMfier → Generate**.
 
-## Install
+## New in 1.0.10
 
-Requires Blender 5.2 LTS or later. Tested with Blender 5.2 on Windows x64 and Blender 5.3 on Apple Silicon. Linux x64 and Intel Macs are still untested. Intel Macs require a custom Blender build with Python 3.13.
+Four more infill patterns, plus three new patterns for the top and bottom.
+Choose each surface pattern independently, then regenerate the preview.
 
-1. In Blender, open **Edit → Preferences → Add-ons**.
-2. Open the menu in the top right and select **Install from Disk**. Choose
-   either the unified ZIP or the ZIP for your platform. Enable **FDMfier** if
-   needed. [GitHub Releases](https://github.com/nikgrv/FDMfier/releases)
-3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
-   and choose **FDMfier → Generate**.
+![FDMfier’s Gyroid, Cubic, Cross 3D, Adaptive Cubic, Hilbert Curve, Archimedean Chords, and Octagram Spiral rendered in Blender](docs/images/patterns_1_0_10.png)
 
-The add-on places the preview over the source at the same scene scale and
-hides the source. Repair and baking also keep the result in place.
-Use **View → Frame Selected** for a closer look.
+| Infill | Top and bottom surfaces |
+| --- | --- |
+| Lines · Parallel Lines · Grid · Triangles · Concentric · Honeycomb | Alternating Lines · Parallel Lines · Concentric |
+| **Gyroid · Cubic · Cross 3D · Adaptive Cubic** | **Hilbert Curve · Archimedean Chords · Octagram Spiral** |
+
+Adaptive Cubic makes smaller cells near model surfaces and larger cells inside.
+Its density sets the finest cell spacing. Cross 3D uses FDMfier’s own fractal
+construction, so its paths can differ from Cura’s.
+
+## Adjust the print
+
+| Control | What you can change |
+| --- | --- |
+| Layers and walls | Layer height, extrusion width, wall count, and separate top and bottom layer counts |
+| Imperfections | Width variation, layer drift, stringing, and droop, with an optional vertex group mask and invert control |
+| Supports | Standard or Tree, an overhang angle threshold, and Build Plate Only |
+| Bed adhesion | Skirt loops and offset, or brim width |
+| Live preview | Visible layers, seam placement, and imperfection strengths in viewport and render |
+| Preparation | Lay on Selected Face, Auto Orient, a vertex estimate, and Repair / Remesh Copy |
+
+Slicing changes take effect on **Regenerate**. Live Geometry Nodes controls
+update immediately. Default settings use **0.30 mm layers**, **two wall lines**,
+**15% Grid infill**, and **four top and bottom layers**.
+
+## Materials and baking
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/benchy_transparent_100.png" alt="Translucent Benchy with visible FDM layers" width="100%"></td>
+<td width="50%"><img src="docs/images/benchy_blue_100_imp.png" alt="Blue Benchy with stringing and other print imperfections" width="100%"></td>
+</tr>
+<tr>
+<td>Translucent material</td>
+<td>Adjustable print imperfections</td>
+</tr>
+</table>
+
+Enable **Fuse for Translucency** to join overlapping extrusion beads into a
+shell while preserving rounded layer ridges, surface patterns, and the air spaces
+in sparse infill. **Original Boolean (V1)** is the default. **Four-Layer Boolean**
+is available for faster baking.
+
+**Bake to Mesh** creates an editable object at the current reveal height and
+hides the source and live preview. Blender pauses during fused baking.
+**Show Live Preview** brings the preview back.
+
+FDMfier creates visual replicas for renders. Use a dedicated slicer to prepare
+printer toolpaths and G-code. The input should be a closed mesh solid. See the
+usage guide for thin features, support coverage, and geometry limits.
 
 ## Roadmap
 
-- [ ] Speed up slicing and baking while keeping fine layer detail and good results with translucent materials.
-- [ ] Test installation, preview generation, and baking on Intel Macs.
-- [x] Confirm the installable ZIP works on Windows x64 with Blender 5.2.
+- [ ] Improve slicing and fusion performance while retaining layer detail and translucent rendering quality.
+- [ ] Test the current release on Windows, Linux, and Intel Mac builds.
+- [ ] Add easier controls for print animations.
+- [ ] Expand infill and surface pattern options.
 - [x] Support Blender 5.2 LTS.
-- [ ] Test the same workflow on Linux.
-- [ ] Make print animations easier with controls for timing the build from the first layer to the last.
-- [ ] Add more infill patterns, including gyroid and cubic.
+- [x] Confirm an earlier release works on Windows x64 with Blender 5.2.
+- [x] Add Gyroid, Cubic, Cross 3D, Adaptive Cubic, and more surface patterns.
 
-## Use
+[Usage and build instructions](docs/USAGE.md) · [Release history](CHANGELOG.md) · [Report an issue](https://github.com/nikgrv/FDMfier/issues)
 
-- **Simulated Print Size** sets the longest dimension used to calculate slicing
-  detail in millimeters. The finished preview is scaled back to the source's
-  scene size. World Z is the build direction.
-- In Edit Mode, select a flat face or coplanar faces on the outside of the
-  source mesh and click **Lay on Selected Face** to put them at world Z = 0.
-  It uses the edit mesh before modifiers. **Auto Orient** is available in
-  Object and Edit Mode. It scores candidate orientations on the evaluated
-  mesh by overhang area, bed contact, and build height. Both actions rotate
-  and place the source object. Regenerate an existing preview after reorienting.
-- Set layer height, extrusion width, wall lines, and separate top and bottom
-  layer counts. Choose alternating, parallel, or concentric surface paths.
-  Sparse infill also offers grid, triangles, concentric, and honeycomb.
-- The vertex estimate uses source bounds, slice settings, and bead resolution.
-  Complex contours and support routing can make the actual count differ.
-  **Repair / Remesh Copy** welds vertices and fills holes on a copy. If that
-  fails to close the mesh, it tries voxel remeshing. Generate from the repaired
-  copy. The original and its live preview are hidden.
-- **Brim** adds attached tracks around the outside of the first layer. Set
-  **Brim Width** in simulated print millimeters. With both enabled, the skirt
-  starts beyond the brim.
-- Change slicing settings or **Imperfection Mask** and click
-  **Regenerate**. Paint a source vertex group to restrict imperfections to
-  selected areas. For droop, the painted weight is applied only where an
-  exterior edge also lacks support from the preceding model layer. Stringing
-  uses the lower weight at its two endpoints. The invert toggle reverses the
-  selected weights. A blank group applies imperfections everywhere. Regenerate
-  after editing weights. Regenerate existing previews to apply perimeter
-  cleanup and the updated bead profile.
-- **Visible Layers**, **Seam Placement**, and the live Geometry Nodes controls
-  update in viewport and render. **Imperfections** is the overall strength.
-  Width Variation, Layer Drift, Stringing, and Overhang Droop have independent
-  strength sliders. The sidebar shows generation progress. Press **Esc** to cancel before the final mesh is created.
-- Infill defaults to **15%**. Fused baking joins adjacent wall tracks into a
-  shell while retaining the air spaces in sparse infill.
-- **Bake to Mesh** creates an editable mesh at the current reveal height.
-  The sidebar displays a status message before Blender pauses to fuse the mesh.
-  Enable **Fuse for Translucency** before baking to join beads while preserving
-  rounded layer ridges, top grooves, and infill cavities. Fused baking keeps
-  the evaluated bead surfaces and joins them with internal bonds. Assign a material
-  to the baked mesh in Blender. Baking hides the source and live preview.
-  **Show Live Preview** brings the preview back.
-- When supports are enabled, **Overhang Angle** measures the minimum angle
-  from vertical. Horizontal undersides are 90°. Tree branches share trunks
-  that taper gradually toward the bed and widen as they carry more tips.
-- Regenerate previews made with earlier releases to use the new scale and
-  imperfection controls.
-
-This is a visual FDM replica for closed mesh solids, including meshes with holes
-through the solid and disconnected shells. Features thinner than the extrusion
-width can disappear. Supports are sampled and can start on the build plate or a lower shelf.
-Enable **Build Plate Only** to restrict Standard and Tree supports to the bed.
-Increase **Support Spacing** if support generation reaches its limit.
-A value of 0 uses automatic spacing. Obstructed overhangs may receive partial coverage. The add-on does not produce
-printer toolpaths or G-code. For dense previews, increase layer height or
-extrusion width if generation reaches a geometry budget.
-
-## Build and verify
-
-From the workspace root, using Blender 5.2 or later as `blender`.
-
-```sh
-blender -b --command extension build --source-dir ./fdmfier --output-dir . --split-platforms
-export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.9-macos_arm64.zip
-blender -b --python-exit-code 1 --python tests/smoke.py
-```
-
-The install command shows the Apple Silicon ZIP as an example. Omit
-`--split-platforms` from the build command to create the unified ZIP. The
-packages bundle CPython 3.13 wheels for pyclipper 1.4.0, with third-party license
-notices inside the wheels. [pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/)
-
-## V1 release
-
-See the [1.0.9 release notes](RELEASE_NOTES_1.0.9.md) and the [V1 roadmap and platform testing checklist](RELEASE_NOTES.md).
+Made by **Nikita Goryainov — nik.grv**. Licensed under **GPL-3.0-or-later**.

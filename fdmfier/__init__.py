@@ -26,6 +26,9 @@ SKIN_PATTERNS = (
     ("LINES", "Alternating Lines", "Change hatch direction each layer"),
     ("PARALLEL", "Parallel Lines", "Keep one hatch direction across layers"),
     ("CONCENTRIC", "Concentric", "Follow successive insets of the surface outline"),
+    ("HILBERT", "Hilbert Curve", "A continuous square maze across the surface"),
+    ("ARCHIMEDEAN", "Archimedean Chords", "A circular spiral clipped to the surface"),
+    ("OCTAGRAM", "Octagram Spiral", "An eight-pointed star spiral clipped to the surface"),
 )
 JOB = None
 
@@ -71,6 +74,10 @@ class FDMSettings(PropertyGroup):
         ("PARALLEL", "Parallel Lines", "Use the same line direction on every layer"),
         ("CONCENTRIC", "Concentric", "Follow the outline in successive loops"),
         ("HONEYCOMB", "Honeycomb", "A hexagonal lattice"),
+        ("GYROID", "Gyroid", "Curved paths through a gyroid surface that evolves with height"),
+        ("CUBIC", "Cubic", "A three-dimensional lattice of tilted cubes"),
+        ("CROSS_3D", "Cross 3D", "A fractal cross pattern that changes across layers"),
+        ("ADAPTIVE_CUBIC", "Adaptive Cubic", "Smaller cubic cells near model surfaces and larger cells inside"),
     ), default="GRID")
     supports: EnumProperty(name="Supports", items=(
         ("OFF", "Off", "Skip supports"),
@@ -618,6 +625,14 @@ def estimate_vertices(source, settings):
     fill_points = fill_layers * (2 * (x + y) / width + 0.4)
     if settings.pattern == "HONEYCOMB" and density:
         fill_points += layers * x * y * (density / width) ** 2
+    if settings.pattern == "GYROID":
+        fill_points += (layers - full_layers) * x * y * density / width ** 2 * 2
+    if settings.pattern == "CROSS_3D":
+        fill_points += (layers - full_layers) * x * y * (density / width) ** 2 * 2
+    for depth, pattern in ((settings.skins, settings.top_pattern),
+                           (settings.bottom_layers, settings.bottom_pattern)):
+        if pattern in {"HILBERT", "ARCHIMEDEAN"}:
+            fill_points += min(layers, depth) * x * y / width ** 2 * (2 if pattern == "HILBERT" else 0.35)
     support_points = layers * x * y / max(width * 6, 2, settings.support_spacing) ** 2 * 3 if settings.supports != "OFF" else 0
     skirt_points = 4 * settings.skirt_loops if settings.skirt else 0
     brim_points = 4 * ceil(settings.brim_width / width) if settings.brim else 0

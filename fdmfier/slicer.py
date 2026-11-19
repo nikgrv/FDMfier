@@ -139,7 +139,7 @@ def section_steps(vertices, triangles, height):
     return result
 
 
-def hatch(polygons, spacing, angle):
+def hatch(polygons, spacing, angle, phase=0):
     if not polygons:
         return []
     ux, uy = cos(angle), sin(angle)
@@ -149,11 +149,13 @@ def hatch(polygons, spacing, angle):
     along = [x * ux + y * uy for x, y in corners]
     across = [x * nx + y * ny for x, y in corners]
     lo, hi = min(along) - 2, max(along) + 2
-    first, last = floor(min(across) / spacing), ceil(max(across) / spacing)
+    phase %= spacing
+    first, last = floor((min(across) - phase) / spacing), ceil((max(across) - phase) / spacing)
     if last - first > MAX_POINTS // 2:
         raise SliceError("Infill path budget exceeded. Increase Extrusion Width or reduce Target Size.")
     lines = [
-        [(round(x * ux + i * spacing * nx), round(x * uy + i * spacing * ny)) for x in (lo, hi)]
+        [(round(x * ux + (i * spacing + phase) * nx),
+          round(x * uy + (i * spacing + phase) * ny)) for x in (lo, hi)]
         for i in range(first, last + 1)
     ]
     return clip_lines(lines, polygons)
@@ -196,7 +198,7 @@ def honeycomb(polygons, width, density):
     return clip_lines(sorted(edges), polygons)
 
 
-def fill_paths(region, pattern, density, width, index):
+def fill_paths(region, pattern, density, width, index, height=0, adaptive=None, pattern_bounds=None):
     if not region or density <= 0:
         return
     if pattern == "CONCENTRIC":
@@ -206,6 +208,30 @@ def fill_paths(region, pattern, density, width, index):
     if pattern == "HONEYCOMB":
         for line in honeycomb(region, width, density):
             yield line, False
+        return
+    if pattern == "CUBIC":
+        for angle in (pi / 2, 7 * pi / 6, 11 * pi / 6):
+            for line in hatch(region, 3 * width / density, angle, (index + 0.5) * height / sqrt(2)):
+                yield line, False
+        return
+    if pattern in {"GYROID", "CROSS_3D", "ADAPTIVE_CUBIC", "HILBERT", "ARCHIMEDEAN", "OCTAGRAM"}:
+        from . import patterns
+
+        area = pattern_bounds or bounds(region)
+        z = (index + 0.5) * height
+        if pattern == "GYROID":
+            lines = patterns.gyroid(area, width, density, z)
+        elif pattern == "CROSS_3D":
+            lines = patterns.cross_3d(area, width, density, z)
+        elif pattern == "ADAPTIVE_CUBIC":
+            lines = adaptive.lines(z) if adaptive is not None else ()
+        elif pattern == "HILBERT":
+            lines = patterns.hilbert(area, width)
+        else:
+            lines = patterns.spiral(area, width, octagram=pattern == "OCTAGRAM")
+        for line in clip_lines(lines, region):
+            closed = len(line) > 3 and line[0] == line[-1]
+            yield line[:-1] if closed else line, closed
         return
     angles = {
         "LINES": [pi / 4 + (index % 2) * pi / 2],
@@ -478,6 +504,17 @@ def generate_steps(vertices, triangles, settings):
     paths = []
     point_count = 0
     narrow = 0
+    pattern_bounds = (
+        units(min(vertex[0] for vertex in vertices)), units(min(vertex[1] for vertex in vertices)),
+        units(max(vertex[0] for vertex in vertices)), units(max(vertex[1] for vertex in vertices)),
+    )
+    adaptive = None
+    if settings.pattern == "ADAPTIVE_CUBIC" and 0 < settings.density < 100:
+        from .patterns import AdaptiveCubic
+
+        yield 0.35, "Building adaptive cubic cells"
+        adaptive = AdaptiveCubic(vertices, triangles, width, settings.density / 100)
+        yield from adaptive.build_steps()
 
     def add(path):
         nonlocal point_count
@@ -536,7 +573,8 @@ def generate_steps(vertices, triangles, settings):
             (top, settings.top_pattern, 1, True),
             (sparse, "LINES" if density == 1 else settings.pattern, density, False),
         ):
-            for line, closed in fill_paths(region, pattern, fill, width, index):
+            for line, closed in fill_paths(region, pattern, fill, width, index, height,
+                                           adaptive, pattern_bounds):
                 add(Path(line, index, INFILL, closed, top_skin=top_skin))
 
     if settings.supports != "OFF":

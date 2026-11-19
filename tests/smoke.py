@@ -142,7 +142,8 @@ assert any(path.wall for path in paths)
 
 
 tube = annulus()
-for pattern in ("LINES", "GRID", "TRIANGLES", "CONCENTRIC", "HONEYCOMB", "PARALLEL"):
+for pattern in ("LINES", "GRID", "TRIANGLES", "CONCENTRIC", "HONEYCOMB", "PARALLEL",
+                "GYROID", "CUBIC", "CROSS_3D", "ADAPTIVE_CUBIC"):
     paths, _, _ = slice_object(tube, pattern=pattern)
     assert sum(p.layer == 8 and p.wall for p in paths) == 4
     for path in paths:
@@ -150,6 +151,20 @@ for pattern in ("LINES", "GRID", "TRIANGLES", "CONCENTRIC", "HONEYCOMB", "PARALL
             continue
         for a, b in zip(path.points, path.points[1:]):
             assert math.hypot((a[0] + b[0])/2, (a[1] + b[1])/2) > slicer.units(5.7)
+
+# New surface patterns remain on their own top/bottom skins and preserve holes.
+for pattern in ("HILBERT", "ARCHIMEDEAN", "OCTAGRAM"):
+    paths, count, _ = slice_object(tube, density=0, top_pattern=pattern, bottom_pattern=pattern)
+    assert any(p.feature == slicer.INFILL and p.top_skin and p.layer == count - 1 for p in paths)
+    assert any(p.feature == slicer.INFILL and not p.top_skin and p.layer == 0 for p in paths)
+    assert not any(p.feature == slicer.INFILL and p.layer == count // 2 for p in paths)
+    for path in paths:
+        if path.feature != slicer.INFILL:
+            continue
+        for a, b in zip(path.points, path.points[1:]):
+            assert math.hypot((a[0] + b[0])/2, (a[1] + b[1])/2) > slicer.units(5.7)
+tube.fdm_print.top_pattern = tube.fdm_print.bottom_pattern = "LINES"
+tube.fdm_print.density = 15
 
 assert any(path.feature == slicer.WEB for path in paths)
 assert bpy.ops.fdm_print.generate() == {"FINISHED"}
