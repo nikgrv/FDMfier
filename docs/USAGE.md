@@ -26,32 +26,23 @@
 - **Brim** adds attached tracks around the outside of the first layer. Set
   **Brim Width** in simulated print millimeters. With both enabled, the skirt
   starts beyond the brim.
-- Change slicing settings or **Imperfection Mask** and click
-  **Regenerate**. Paint a source vertex group to restrict imperfections to
-  selected areas. For droop, the painted weight is applied only where an
-  exterior edge also lacks support from the preceding model layer. Stringing
-  uses the lower weight at its two endpoints. The invert toggle reverses the
-  selected weights. A blank group applies imperfections everywhere. Regenerate
-  after editing weights. Regenerate existing previews to apply perimeter
-  cleanup and the updated bead profile.
-- **Visible Layers**, **Seam Placement**, and the live Geometry Nodes controls
-  update in viewport and render. **Imperfections** is the overall strength.
-  Width Variation, Layer Drift, Stringing, and Overhang Droop have independent
-  strength sliders. The sidebar shows generation progress. Press **Esc** to cancel before the final mesh is created.
-- Infill defaults to **15%**. Fused baking joins adjacent wall tracks into a
-  shell while retaining the air spaces in sparse infill.
-- **Bake to Mesh** creates an editable mesh at the current reveal height.
-  The sidebar displays a status message before Blender pauses to fuse the mesh.
-  Enable **Fuse for Translucency** before baking to join beads while preserving
-  rounded layer ridges, top grooves, and infill cavities. Fused baking keeps
-  the evaluated bead surfaces and joins them with internal bonds. Assign a material
-  to the baked mesh in Blender. Baking hides the source and live preview.
-  **Show Live Preview** brings the preview back.
+- **Generate** builds a continuous Joined Profiles mesh with rounded layers,
+  patterned skins, and air spaces between sparse infill. It is ready to render
+  with translucent materials. Change print settings and click **Regenerate**
+  to rebuild it. The status bar shows progress while Blender works. Press **Esc** to cancel.
+- **Visible Layers** works in the sidebar and the Geometry Nodes modifier.
+  Partial reveals show a closed cross-section with the infill and air gaps
+  visible. The slider uses the generated mesh in viewport and render.
+- **Imperfections** adds mild surface variation, stringing, and sag along
+  unsupported edges. Select a vertex group to limit the effect and regenerate
+  after editing the group or switching its invert toggle.
+- Generate uses the source's active material. Regenerate keeps the preview's
+  material. Standard and Tree supports use a separate material slot.
+- **Remove Preview** is next to Regenerate and brings the source back.
 - When supports are enabled, **Overhang Angle** measures the minimum angle
   from vertical. Horizontal undersides are 90°. Tree branches share trunks
   that taper gradually toward the bed and widen as they carry more tips.
-- Regenerate previews made with earlier releases to use the new scale and
-  imperfection controls.
+- Regenerate earlier previews to use Joined Profiles and its reveal slider.
 
 This is a visual FDM replica for closed mesh solids, including meshes with holes
 through the solid and disconnected shells. Features thinner than the extrusion
@@ -64,17 +55,27 @@ extrusion width if generation reaches a geometry budget.
 
 ## Build and verify
 
-From the workspace root, using Blender 5.2 or later as `blender`.
+From the workspace root, using Blender 5.2 or later as `blender`:
 
 ```sh
 blender -b --command extension build --source-dir ./fdmfier --output-dir . --split-platforms
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.10-macos_arm64.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.1.1-macos_arm64.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 blender -b --python-exit-code 1 --python tests/infill.py
+blender -b --python-exit-code 1 --python tests/solid.py
 ```
 
-The install command shows the Apple Silicon ZIP as an example. Omit
-`--split-platforms` from the build command to create the unified ZIP. The
-packages bundle CPython 3.13 wheels for pyclipper 1.4.0, with third-party license
-notices inside the wheels. [pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/)
+The install command shows the Apple Silicon ZIP as an example. Choose the ZIP
+for the system you're testing. The Linux x64 package includes CPython 3.13
+and 3.14 wheels for pyclipper 1.4.0. The macOS and Windows packages include
+CPython 3.13 wheels. Blender selects the wheel for its own Python version.
+Third-party license notices are included inside the wheels.
+
+Use a local 3DBenchy STL to check the 250-layer Gyroid reveal and the lower
+hull across all infill patterns.
+
+```sh
+blender -b --python-exit-code 1 --python tests/benchy.py -- /path/to/3DBenchy.stl
+blender -b --python-exit-code 1 --python tests/benchy.py -- /path/to/3DBenchy.stl --all-patterns
+```

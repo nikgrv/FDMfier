@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "FDMfier"
-version = "1.0.10"
+version = "1.1.1"
 name = "FDMfier"
 tagline = "Turn solid meshes into layered FDM print previews"
 maintainer = "Nikita Goryainov - nik.grv"
@@ -13,6 +13,7 @@ license = ["SPDX:GPL-3.0-or-later"]
 wheels = [
   "./wheels/pyclipper-1.4.0-cp313-cp313-macosx_10_13_universal2.whl",
   "./wheels/pyclipper-1.4.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+  "./wheels/pyclipper-1.4.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
   "./wheels/pyclipper-1.4.0-cp313-cp313-win_amd64.whl",
 ]
 

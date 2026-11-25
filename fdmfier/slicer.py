@@ -29,9 +29,9 @@ class Path:
     feature: int
     closed: bool = False
     wall: bool = False
-    support_below: list | None = None
     activation: float = 0.0
     top_skin: bool = False
+    sparse: bool = False
 
 
 def units(mm):
@@ -198,7 +198,7 @@ def honeycomb(polygons, width, density):
     return clip_lines(sorted(edges), polygons)
 
 
-def fill_paths(region, pattern, density, width, index, height=0, adaptive=None, pattern_bounds=None):
+def fill_paths(region, pattern, density, width, index, height=0, adaptive=None, pattern_bounds=None, *, detailed=False):
     if not region or density <= 0:
         return
     if pattern == "CONCENTRIC":
@@ -220,15 +220,15 @@ def fill_paths(region, pattern, density, width, index, height=0, adaptive=None, 
         area = pattern_bounds or bounds(region)
         z = (index + 0.5) * height
         if pattern == "GYROID":
-            lines = patterns.gyroid(area, width, density, z)
+            lines = patterns.gyroid(area, width, density, z, detailed=detailed)
         elif pattern == "CROSS_3D":
             lines = patterns.cross_3d(area, width, density, z)
         elif pattern == "ADAPTIVE_CUBIC":
             lines = adaptive.lines(z) if adaptive is not None else ()
         elif pattern == "HILBERT":
-            lines = patterns.hilbert(area, width)
+            lines = patterns.hilbert(area, width, detailed=detailed)
         else:
-            lines = patterns.spiral(area, width, octagram=pattern == "OCTAGRAM")
+            lines = patterns.spiral(area, width, octagram=pattern == "OCTAGRAM", detailed=detailed)
         for line in clip_lines(lines, region):
             closed = len(line) > 3 and line[0] == line[-1]
             yield line[:-1] if closed else line, closed
@@ -267,7 +267,8 @@ def inside(point, polygons):
     return winding != 0
 
 
-def support_steps(layers, width, height, tree, angle, flat_faces, *, build_plate_only=False, tip_spacing=0):
+def support_steps(layers, width, height, tree, angle, flat_faces, *, build_plate_only=False, tip_spacing=0,
+                  support_regions=None):
     """Route sampled overhangs downward, anchoring routes to the bed or lower shelves."""
     natural_spacing = max(width * 6, units(2))
     spacing = max(natural_spacing, tip_spacing)
@@ -392,7 +393,13 @@ def support_steps(layers, width, height, tree, angle, flat_faces, *, build_plate
                 for i in range(12)
             ])
         rooted = next_rooted
-        area = polygon_op(polygon_op(circles), offset(layers[index], width // 2), clip.CT_DIFFERENCE)
+        if not circles:
+            continue
+        area = polygon_op(polygon_op(circles), offset(layers[index], round(width * 0.75)), clip.CT_DIFFERENCE)
+        if support_regions is not None:
+            if area:
+                support_regions[index] = area
+            continue
         for contour in area:
             yield Path(contour, index, SUPPORT, True)
         for line in hatch(offset(area, -width), width * 2, (index % 2) * pi / 2):
@@ -496,7 +503,7 @@ def simplify_wall(contour, tolerance):
     return contour
 
 
-def generate_steps(vertices, triangles, settings):
+def generate_steps(vertices, triangles, settings, solid_regions=None, *, support_regions=None):
     """Yield progress between slicing steps and return the finished paths."""
     layers = yield from section_steps(vertices, triangles, settings.layer_height)
     width = max(1, units(settings.width))
@@ -516,20 +523,23 @@ def generate_steps(vertices, triangles, settings):
         adaptive = AdaptiveCubic(vertices, triangles, width, settings.density / 100)
         yield from adaptive.build_steps()
 
+    solid_mode = solid_regions is not None
+    point_limit = MAX_POINTS * 4 if solid_mode else MAX_POINTS
+
     def add(path):
         nonlocal point_count
         # Closed paths are resampled for localized seam and imperfection control.
         points = path.points
-        if path.wall:
+        if path.wall and not solid_mode:
             pairs = zip(points, points[1:] + points[:1])
             point_count += sum(max(1, ceil(hypot(b[0] - a[0], b[1] - a[1]) / (2 * width))) for a, b in pairs)
         else:
             point_count += len(points)
-        if point_count > MAX_POINTS:
+        if point_count > point_limit:
             adjustment = "Increase Layer Height or Extrusion Width."
             if path.feature == SUPPORT:
                 adjustment = "Increase Support Spacing or Layer Height."
-            raise SliceError(f"Preview exceeded {MAX_POINTS:,} path vertices at layer {path.layer + 1}. {adjustment}")
+            raise SliceError(f"Preview exceeded {point_limit:,} path vertices at layer {path.layer + 1}. {adjustment}")
         paths.append(path)
 
     path_share = 0.38 if settings.supports != "OFF" else 0.59
@@ -537,10 +547,9 @@ def generate_steps(vertices, triangles, settings):
         yield 0.35 + path_share * index / len(layers), "Building walls and infill"
         if not layer:
             continue
-        if index and index % 3 == 1:
+        if index % 7 == 1:
             for path in web_paths(layer, index, width):
                 add(path)
-        lower = offset(layers[index - 1], round(width * 0.45)) if index else None
         for wall in range(settings.walls):
             contours = offset(layer, -round((wall + 0.5) * width))
             if not contours:
@@ -554,9 +563,12 @@ def generate_steps(vertices, triangles, settings):
                 # Bound simplification error so it cannot shave a curved
                 # contour differently on each slice of a triangulated wall.
                 contour = simplify_wall(contour, max(1, width * 0.008))
-                add(Path(contour, index, WALL, True, True, lower if wall == 0 else None))
-        core = offset(layer, -(settings.walls * width + width // 2))
+                add(Path(contour, index, WALL, True, True))
+        # Flat-ended clipped tracks must reach inside the last wall bead.
+        core = offset(layer, -round((settings.walls - 0.12) * width))
         if not core:
+            if solid_regions is not None:
+                solid_regions[index] = layer, []
             continue
         top = skin_region(core, layers, index, settings.skins, 1)
         bottom = skin_region(core, layers, index, settings.bottom_layers, -1)
@@ -568,21 +580,29 @@ def generate_steps(vertices, triangles, settings):
             top = polygon_op(top, bottom, clip.CT_DIFFERENCE)
         sparse = polygon_op(polygon_op(core, bottom, clip.CT_DIFFERENCE), top, clip.CT_DIFFERENCE)
         density = settings.density / 100
-        for region, pattern, fill, top_skin in (
-            (bottom, settings.bottom_pattern, 1, False),
-            (top, settings.top_pattern, 1, True),
-            (sparse, "LINES" if density == 1 else settings.pattern, density, False),
+        if solid_regions is not None:
+            solid_regions[index] = layer, (core if density == 1 else polygon_op(top + bottom))
+        for region, pattern, fill, top_skin, sparse_fill in (
+            (bottom, settings.bottom_pattern, 1, False, False),
+            (top, settings.top_pattern, 1, True, False),
+            (sparse, "LINES" if density == 1 else settings.pattern, density, False, density < 1),
         ):
+            if region and region is not sparse and pattern != "CONCENTRIC":
+                # Close the gaps left by clipped hatch ends. Inset the
+                # pattern enough to leave the perimeter legible.
+                for contour in region:
+                    add(Path(contour, index, INFILL, True, top_skin=top_skin))
+                region = offset(region, -round(width * 0.32))
             for line, closed in fill_paths(region, pattern, fill, width, index, height,
-                                           adaptive, pattern_bounds):
-                add(Path(line, index, INFILL, closed, top_skin=top_skin))
+                                           adaptive, pattern_bounds, detailed=solid_mode):
+                add(Path(line, index, INFILL, closed, top_skin=top_skin, sparse=sparse_fill))
 
     if settings.supports != "OFF":
         flats = yield from flat_overhang_steps(vertices, triangles, layers, settings.layer_height)
         for item in support_steps(layers, width, height, settings.supports == "TREE",
                                   min(89.9, getattr(settings, "support_angle", 45)),
                                   flats, build_plate_only=settings.build_plate_only,
-                                  tip_spacing=units(settings.support_spacing)):
+                                  tip_spacing=units(settings.support_spacing), support_regions=support_regions):
             if isinstance(item, Path):
                 add(item)
             else:
@@ -609,7 +629,7 @@ def generate_steps(vertices, triangles, settings):
             for outline in offset(layers[0], distance):
                 if clip.Orientation(outline):
                     add(Path(outline, 0, SKIRT, True))
-    if not any(path.feature == WALL for path in paths):
+    if not solid_mode and not any(path.feature == WALL for path in paths):
         raise SliceError("No walls fit this mesh. Reduce Extrusion Width or increase Target Size.")
     return paths, len(layers), narrow
 

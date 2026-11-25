@@ -70,32 +70,36 @@ assert 1 in spans and max(spans) > 1
 lines = adaptive.lines(slicer.units(3.15))
 assert lines and lines == adaptive.lines(slicer.units(3.15))
 
-# Both fusion methods must retain closed geometry with the new path types.
+# A clipped gyroid track must reach inside the last wall before its flat cap.
+config.pattern = "GYROID"
+config.density = 15
+paths, _, _ = slicer.generate(vertices, triangles, config)
+wall_x = max(x for path in paths if path.layer == 3 and path.wall for x, y in path.points)
+inner_wall_x = wall_x - slicer.units(config.width)
+infill_x = max(x for path in paths if path.layer == 3 and path.sparse for x, y in path.points)
+assert inner_wall_x - infill_x < slicer.units(config.width) / 2
+
+# Joined Profiles must keep each pattern closed with a partial reveal.
 settings.density = 15
-settings.fuse_bake = True
-for method in ("V1", "BATCHES"):
-    settings.fusion_method = method
-    for index, pattern in enumerate(infill_patterns):
-        settings.pattern = pattern
-        settings.top_pattern = surface_patterns[index % 3]
-        settings.bottom_pattern = surface_patterns[(index + 2) % 3]
-        assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-        live = bpy.context.object
-        modifier = addon.node_modifier(live)
-        sockets = addon.preview.sockets(modifier.node_group)
-        getattr(modifier.properties.inputs, sockets["Imperfections"]).value = 0.25
-        assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-        baked = bpy.context.object
+for index, pattern in enumerate(infill_patterns):
+    settings.pattern = pattern
+    settings.top_pattern = surface_patterns[index % 3]
+    settings.bottom_pattern = surface_patterns[(index + 2) % 3]
+    assert bpy.ops.fdm_print.generate() == {"FINISHED"}
+    live = bpy.context.object
+    modifier = addon.node_modifier(live)
+    sockets = addon.preview.sockets(modifier.node_group)
+    visible = getattr(modifier.properties.inputs, sockets["Visible Layers"])
+    for shown in (live["fdm_layers"], 5):
+        visible.value = shown
+        evaluated = live.evaluated_get(bpy.context.evaluated_depsgraph_get()).data
         mesh = bmesh.new()
         try:
-            mesh.from_mesh(baked.data)
-            assert all(edge.is_manifold and edge.is_contiguous for edge in mesh.edges), (method, pattern)
+            mesh.from_mesh(evaluated)
+            assert all(edge.is_manifold and edge.is_contiguous for edge in mesh.edges), (pattern, shown)
             assert mesh.calc_volume(signed=True) > 0
         finally:
             mesh.free()
-        assert baked.matrix_world == live.matrix_world
-        assert live.hide_get() and source.hide_get()
-        assert bpy.ops.fdm_print.show() == {"FINISHED"}
-        assert bpy.ops.fdm_print.remove() == {"FINISHED"}
+    assert bpy.ops.fdm_print.remove() == {"FINISHED"}
 
 print("FDM infill and surface tests passed")

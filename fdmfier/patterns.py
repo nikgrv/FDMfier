@@ -13,11 +13,11 @@ from mathutils.bvhtree import BVHTree
 from .slicer import MAX_POINTS, SCALE, SliceError
 
 
-def gyroid(area, width, density, z):
+def gyroid(area, width, density, z, *, detailed=False):
     # Intersect sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x) = 0.
     # Average intersection length is approximately 2.5 times the period per cell.
     period = 2.5 * width / density
-    step = max(width / 2, period / 48)
+    step = max(width / 3, period / 80) if detailed else max(width / 2, period / 48)
     x0, y0, x1, y1 = area
     left, bottom = floor(x0 / step), floor(y0 / step)
     columns = ceil(x1 / step) - left + 1
@@ -210,7 +210,7 @@ class AdaptiveCubic:
         return result
 
 
-def hilbert(area, width):
+def hilbert(area, width, *, detailed=False):
     x0, y0, x1, y1 = area
     # Overlap the rounded beads at the maze's inside corners.
     spacing = width * 0.70
@@ -236,10 +236,26 @@ def hilbert(area, width):
             remainder //= 4
             size *= 2
         points.append((round(origin_x + x * spacing), round(origin_y + y * spacing)))
-    return [points]
+    if not detailed:
+        return [points]
+    # Round the reversals in the maze before clipping to the skin region.
+    rounded = [points[0]]
+    cut = width * 0.17
+    for a, b, c in zip(points, points[1:], points[2:]):
+        incoming = (a[0] - b[0], a[1] - b[1])
+        outgoing = (c[0] - b[0], c[1] - b[1])
+        if not (incoming[0] * outgoing[1] - incoming[1] * outgoing[0]):
+            rounded.append(b)
+            continue
+        for index in range(6):
+            t = index / 5
+            rounded.append(tuple(round(value + cut / spacing * ((1 - t) ** 2 * u + t ** 2 * v))
+                                 for value, u, v in zip(b, incoming, outgoing)))
+    rounded.append(points[-1])
+    return [rounded]
 
 
-def spiral(area, width, *, octagram=False):
+def spiral(area, width, *, octagram=False, detailed=False):
     x0, y0, x1, y1 = area
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     radius = hypot(x1 - x0, y1 - y0) / 2 + width
@@ -259,10 +275,12 @@ def spiral(area, width, *, octagram=False):
     else:
         # Arc-length-controlled sampling keeps circular tracks visibly rounded.
         angle, limit = 0.0, 2 * pi * radius / width
+        tolerance = 0.025 if detailed else 0.08
+        max_step = pi / 12 if detailed else pi / 8
         points = [(round(cx), round(cy))]
         while angle < limit:
             r = width * angle / (2 * pi)
-            angle = min(limit, angle + min(pi / 8, sqrt(0.08 * width / max(width, r))))
+            angle = min(limit, angle + min(max_step, sqrt(tolerance * width / max(width, r))))
             r = width * angle / (2 * pi)
             points.append((round(cx + r * cos(angle)), round(cy + r * sin(angle))))
             if len(points) > MAX_POINTS:

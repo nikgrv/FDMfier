@@ -2,25 +2,24 @@
 
 By Nikita Goryainov - nik.grv. Licensed under GPL-3.0-or-later.
 
-Turn a closed mesh into an FDM-style replica with visible extrusion beads, infill,
-a seam, and optional supports, skirt, and brim. The add-on slices the evaluated
-mesh, including modifiers. A Geometry Nodes modifier turns its paths into
-renderable geometry.
+Turn a closed mesh into an FDM-style replica with rounded layers, patterned
+infill, and optional supports, skirt, and brim. FDMfier slices the evaluated
+mesh and joins the extrusion profiles into a continuous surface. Geometry Nodes
+controls the layer reveal and imperfections on that surface.
 
 ## Install
 
-Requires Blender 5.2 LTS or later. Version 1.0.10 was tested with Blender 5.3 on Apple Silicon. An earlier release was tested with Blender 5.2 on Windows x64. Runtime testing of 1.0.10 on Windows, Linux, and Intel Mac builds is pending. Intel Macs require a custom Blender build with Python 3.13.
+Requires Blender 5.2 or later. See the 1.1.1 release notes for runtime testing.
+Intel Macs require a custom Blender build with Python 3.13.
 
 1. In Blender, open **Edit → Preferences → Add-ons**.
 2. Open the menu in the top right, select **Install from Disk**, and choose
    the FDMfier ZIP for your platform. Enable **FDMfier** if needed.
-   If you installed a development build, disable it before enabling V1. Blender
-   treats the new package ID as a separate extension.
 3. Select a solid mesh in Object Mode. Open the 3D Viewport sidebar with **N**
    and choose **FDMfier → Generate**.
 
 The add-on places the preview over the source at the same scene scale and
-hides the source. Repair and baking also keep the result in place.
+hides the source. Repair keeps the result in place as well.
 Use **View → Frame Selected** for a closer look.
 
 ## Use
@@ -51,35 +50,23 @@ Use **View → Frame Selected** for a closer look.
 - **Brim** adds attached tracks around the outside of the first layer. Set
   **Brim Width** in simulated print millimeters. With both enabled, the skirt
   starts beyond the brim.
-- Change slicing settings or **Imperfection Mask** and click
-  **Regenerate**. Paint a source vertex group to restrict imperfections to
-  selected areas. For droop, the painted weight is applied only where an
-  exterior edge also lacks support from the preceding model layer. Stringing
-  uses the lower weight at its two endpoints. The invert toggle reverses the
-  selected weights. A blank group applies imperfections everywhere. Regenerate
-  after editing weights. Regenerate existing previews to apply perimeter
-  cleanup and the updated bead profile.
-- **Visible Layers**, **Seam Placement**, and the live Geometry Nodes controls
-  update in viewport and render. **Imperfections** is the overall strength.
-  Width Variation, Layer Drift, Stringing, and Overhang Droop have independent
-  strength sliders. The sidebar shows generation progress. Press **Esc** to cancel before the final mesh is created.
-- Infill defaults to **15%**. Fused baking joins adjacent wall tracks into a
-  shell while retaining the air spaces in sparse infill.
-- **Bake to Mesh** creates an editable mesh at the current reveal height.
-  The sidebar displays a status message before Blender pauses to fuse the mesh.
-  Enable **Fuse for Translucency** before baking to join beads while preserving
-  rounded layer ridges, top grooves, and infill cavities. Fused baking keeps
-  the evaluated bead surfaces and joins them with internal bonds. Assign a material
-  to the baked mesh in Blender. Baking hides the source and live preview.
-  **Show Live Preview** brings the preview back.
-- **Original Boolean (V1)** is the default fusion method and prioritizes the
-  detail of the original bake. **Four-Layer Boolean** fuses four layers at a
-  time before joining the batches to speed up baking.
+- **Generate** builds a continuous Joined Profiles mesh with rounded layers,
+  patterned skins, and air spaces between sparse infill. It is ready to render
+  with translucent materials. Change print settings and click **Regenerate**
+  to rebuild it. The status bar shows progress while Blender works. Press **Esc** to cancel.
+- **Visible Layers** works in the sidebar and the Geometry Nodes modifier.
+  Partial reveals show a closed cross-section with the infill and air gaps
+  visible. The slider uses the generated mesh in viewport and render.
+- **Imperfections** adds mild surface variation, stringing, and sag along
+  unsupported edges. Select a vertex group to limit the effect and regenerate
+  after editing the group or switching its invert toggle.
+- Generate uses the source's active material. Regenerate keeps the preview's
+  material. Standard and Tree supports use a separate material slot.
+- **Remove Preview** is next to Regenerate and brings the source back.
 - When supports are enabled, **Overhang Angle** measures the minimum angle
   from vertical. Horizontal undersides are 90°. Tree branches share trunks
   that taper gradually toward the bed and widen as they carry more tips.
-- Regenerate previews made with earlier releases to use the new scale and
-  imperfection controls.
+- Regenerate earlier previews to use Joined Profiles and its reveal slider.
 
 This is a visual FDM replica for closed mesh solids, including meshes with holes
 through the solid and disconnected shells. Features thinner than the extrusion
@@ -97,11 +84,12 @@ From the workspace root, using Blender 5.2 or later as `blender`:
 ```sh
 blender -b --command extension build --source-dir ./fdmfier --output-dir . --split-platforms
 export BLENDER_USER_RESOURCES="$(mktemp -d)"
-blender -b --command extension install-file -r user_default -e ./FDMfier-1.0.10-macos_arm64.zip
+blender -b --command extension install-file -r user_default -e ./FDMfier-1.1.1-macos_arm64.zip
 blender -b --python-exit-code 1 --python tests/smoke.py
 ```
 
 The install command shows the Apple Silicon ZIP as an example. Choose the ZIP
-for the system you're testing. Each package bundles a CPython 3.13 wheel for
-[pyclipper 1.4.0](https://pypi.org/project/pyclipper/1.4.0/). Third-party license
-notices are included inside the wheel.
+for the system you're testing. The Linux x64 package includes CPython 3.13
+and 3.14 wheels for pyclipper 1.4.0. The macOS and Windows packages include
+CPython 3.13 wheels. Blender selects the wheel for its own Python version.
+Third-party license notices are included inside the wheels.

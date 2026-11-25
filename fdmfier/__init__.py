@@ -9,19 +9,21 @@ from types import SimpleNamespace
 
 import bmesh
 import bpy
+import numpy as np
+from bpy.app.handlers import persistent
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty
 from bpy.types import Operator, Panel, PropertyGroup
 from mathutils import Matrix, Vector
 
-from . import fusion, orientation, preview, slicer
+from . import loft, orientation, preview, slicer, solid
 
 SETTING_NAMES = (
     "size", "layer_height", "width", "walls", "skins", "density",
     "pattern", "supports", "skirt", "skirt_loops", "skirt_offset", "brim", "brim_width",
-    "bottom_layers", "top_pattern", "bottom_pattern", "weight_group", "invert_weight_group", "support_angle",
-    "build_plate_only", "support_spacing",
+    "bottom_layers", "top_pattern", "bottom_pattern", "support_angle",
+    "build_plate_only", "support_spacing", "weight_group", "invert_weight_group",
 )
-LIVE = ("Visible Layers", "Imperfections", "Seam Placement", *preview.EFFECTS)
+LIVE = ("Visible Layers", "Imperfections")
 SKIN_PATTERNS = (
     ("LINES", "Alternating Lines", "Change hatch direction each layer"),
     ("PARALLEL", "Parallel Lines", "Keep one hatch direction across layers"),
@@ -33,11 +35,22 @@ SKIN_PATTERNS = (
 JOB = None
 
 
-def redraw_preview_panels(context):
+def redraw_preview_progress(context):
     for window in context.window_manager.windows:
+        for area in getattr(window, "global_areas", ()):
+            if area.type == "STATUSBAR":
+                area.tag_redraw()
         for area in window.screen.areas:
             if area.type == "VIEW_3D":
                 area.tag_redraw()
+
+
+def draw_generation_progress(self, context):
+    if JOB is not None and JOB.scene == context.scene:
+        factor, _ = JOB.progress
+        row = self.layout.row()
+        row.scale_x = 2
+        row.progress(factor=factor, type="BAR", text=f"FDMfier {factor:.0%}")
 
 
 class FDMSettings(PropertyGroup):
@@ -61,11 +74,6 @@ class FDMSettings(PropertyGroup):
     build_plate_only: BoolProperty(
         name="Build Plate Only", description="Generate only supports rooted on the build plate"
     )
-    fusion_method: EnumProperty(name="Fusion Method", items=(
-        ("V1", "Original Boolean (V1)", "Slower, but produces better results for layer detail and translucency.", 1),
-        ("BATCHES", "Four-Layer Boolean", "Fuse evaluated beads in batches of four print layers", 0),
-    ), default="V1")
-    fuse_bake: BoolProperty(name="Fuse for Translucency", default=False)
     density: FloatProperty(name="Infill (%)", default=15, min=0, max=100, precision=1)
     pattern: EnumProperty(name="Infill Pattern", items=(
         ("LINES", "Lines", "Alternate line directions between layers"),
@@ -110,7 +118,8 @@ def existing_preview(scene, source):
 
 def node_modifier(obj):
     return next((modifier for modifier in obj.modifiers if modifier.type == "NODES"
-                 and modifier.node_group and modifier.node_group.get("fdm_schema") in {1, 2, 3, 4, 5, 6, 7}), None)
+                 and modifier.node_group and (modifier.node_group.get("fdm_joined_reveal")
+                 or modifier.node_group.get("fdm_schema") in {1, 2, 3, 4, 5, 6, 7, 8})), None)
 
 
 def evaluated_input(context, source, settings):
@@ -166,6 +175,8 @@ def evaluated_input(context, source, settings):
         welded_weights = [0.0] * len(vertices)
         for i, j in remap.items():
             welded_weights[j] = max(welded_weights[j], weights[i])
+        if settings.invert_weight_group:
+            welded_weights = [1 - weight for weight in welded_weights]
         settings.weight_surface = ([Vector(vertex) for vertex in vertices], faces, welded_weights)
     return vertices, faces, scale, origin
 
@@ -177,25 +188,55 @@ def remove_object(obj):
         bpy.data.meshes.remove(data)
 
 
-def hide_previous_bakes(view_layer, source, exclude=None):
+def hide_previous_bakes(view_layer, source):
     for obj in view_layer.objects:
-        if (obj != exclude and (obj.get("fdm_baked") or obj.get("fdm_fused")) and obj.fdm_print.source == source):
+        if (obj.get("fdm_baked") or obj.get("fdm_fused")) and obj.fdm_print.source == source:
             obj.hide_set(True)
             obj.hide_render = True
 
 
+def set_preview_materials(obj, source, previous, support_start):
+    body = source.active_material
+    support = None
+    support_selected = False
+    if previous is not None:
+        had_support = bool(previous.get("fdm_support_slot")) and len(previous.material_slots) > 1
+        support_selected = had_support and previous.active_material_index == 1
+        body = previous.material_slots[0].material if support_selected else previous.active_material
+        if had_support:
+            support = previous.material_slots[1].material
+    if body is not None or support_start is not None:
+        obj.data.materials.append(body)
+    if support_start is not None:
+        obj.data.materials.append(support)
+        obj["fdm_support_slot"] = True
+        indices = np.zeros(len(obj.data.polygons), dtype=np.int32)
+        indices[support_start:] = 1
+        obj.data.polygons.foreach_set("material_index", indices)
+        obj.active_material_index = int(support_selected)
+
+
 def publish(context, source, settings, result, mm_per_unit, location):
-    paths, layers, narrow = result
+    layers, narrow = result[-2:]
     previous = existing_preview(context.scene, source)
-    live = {}
+    visible = layers
+    imperfections = 0.0
     if previous is not None:
         modifier = node_modifier(previous)
         if modifier:
             ids = preview.sockets(modifier.node_group)
-            live = {name: getattr(modifier.properties.inputs, ids[name]).value for name in LIVE if name in ids}
-            if live.get("Visible Layers") == previous["fdm_layers"]:
-                live.pop("Visible Layers")
-    mesh = preview.make_path_mesh(paths, settings, mm_per_unit)
+            if "Visible Layers" in ids:
+                prior = getattr(modifier.properties.inputs, ids["Visible Layers"]).value
+                if prior < previous["fdm_layers"]:
+                    visible = max(0, min(layers, prior))
+            if "Imperfections" in ids:
+                imperfections = getattr(modifier.properties.inputs, ids["Imperfections"]).value
+    mesh = bpy.data.meshes.new("FDM joined profiles")
+    try:
+        result[0].write(mesh)
+    except Exception:
+        bpy.data.meshes.remove(mesh)
+        raise
     try:
         obj = bpy.data.objects.new(f"{source.name} • FDM Preview", mesh)
     except Exception:
@@ -205,19 +246,22 @@ def publish(context, source, settings, result, mm_per_unit, location):
         obj.location = location
         obj["fdm_preview"] = True
         obj["fdm_layers"] = layers
+        set_preview_materials(obj, source, previous, result[0].support_start)
         obj.fdm_print.source = source
         for name in SETTING_NAMES:
             setattr(obj.fdm_print, name, getattr(settings, name))
-        preview.mesh_groups(obj)
         modifier = obj.modifiers.new("FDMfier", "NODES")
-        modifier.node_group = preview.node_group()
-        ids = preview.sockets(modifier.node_group)
-        getattr(modifier.properties.inputs, ids["Bead Width"]).value = settings.width / mm_per_unit
-        getattr(modifier.properties.inputs, ids["Layer Height"]).value = settings.layer_height / mm_per_unit
-        getattr(modifier.properties.inputs, ids["Visible Layers"]).value = min(layers, live.get("Visible Layers", layers))
-        for name in LIVE[1:]:
-            if name in live:
-                getattr(modifier.properties.inputs, ids[name]).value = live[name]
+        modifier.node_group = loft.reveal_nodes(layers)
+        sockets = preview.sockets(modifier.node_group)
+        for name, value in (("Visible Layers", visible), ("Imperfections", imperfections),
+                            ("Extrusion Width", settings.width / mm_per_unit),
+                            ("Layer Height", settings.layer_height / mm_per_unit)):
+            getattr(modifier.properties.inputs, sockets[name]).value = value
+        cleanup = obj.modifiers.new("Remove detached infill", "NODES")
+        cleanup.node_group = solid.cleanup_nodes()
+        socket = preview.sockets(cleanup.node_group)["Minimum Void"]
+        getattr(cleanup.properties.inputs, socket).value = (
+            0.025 * settings.width ** 2 * settings.layer_height / mm_per_unit ** 3)
         collection = next((coll for coll in source.users_collection
                            if context.view_layer.layer_collection.collection == coll
                            or coll in context.view_layer.layer_collection.collection.children_recursive),
@@ -276,7 +320,7 @@ class FDM_OT_generate(Operator):
             raise slicer.SliceError("The source object or scene changed while generating.")
         layers, narrow = publish(context, self.source, self.settings, result, self.mm_per_unit, self.location)
         if narrow:
-            self.report({"WARNING"}, f"Generated {layers} layers. Some thin sections could not fit a wall.")
+            self.report({"WARNING"}, f"Generated {layers} layers. Some sections were narrower than the extrusion width.")
         else:
             self.report({"INFO"}, f"Generated {layers} print layers.")
         return {"FINISHED"}
@@ -284,10 +328,18 @@ class FDM_OT_generate(Operator):
     def execute(self, context):
         try:
             self.prepare(context)
-            return self.finish(context, slicer.generate(self.vertices, self.faces, self.settings))
+            steps = self.generation_steps()
+            try:
+                while True:
+                    next(steps)
+            except StopIteration as completed:
+                return self.finish(context, completed.value)
         except (ValueError, RuntimeError, ReferenceError) as error:
             self.report({"ERROR"}, str(error))
             return {"CANCELLED"}
+
+    def generation_steps(self):
+        return loft.generate_steps(self.vertices, self.faces, self.settings, self.mm_per_unit)
 
     def invoke(self, context, event):
         global JOB
@@ -299,7 +351,7 @@ class FDM_OT_generate(Operator):
         self.timer = context.window_manager.event_timer_add(0.02, window=context.window)
         context.window_manager.modal_handler_add(self)
         JOB = self
-        redraw_preview_panels(context)
+        redraw_preview_progress(context)
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
@@ -318,7 +370,7 @@ class FDM_OT_generate(Operator):
                 return status
             if self.steps is None:
                 self.prepare_snapshot(context)
-                self.steps = slicer.generate_steps(self.vertices, self.faces, self.settings)
+                self.steps = self.generation_steps()
                 return {"RUNNING_MODAL"}
 
             previous = self.progress
@@ -331,9 +383,9 @@ class FDM_OT_generate(Operator):
             except StopIteration as complete:
                 self.result = complete.value
                 # Let Blender redraw before creating and swapping the mesh.
-                self.progress = (0.96, "Creating Blender preview")
+                self.progress = (0.99, "Creating Blender preview")
             if self.progress != previous:
-                redraw_preview_panels(context)
+                redraw_preview_progress(context)
         except Exception as error:
             self.cancel(context)
             self.report({"ERROR"}, str(error))
@@ -349,135 +401,7 @@ class FDM_OT_generate(Operator):
             self.vertices = self.faces = self.settings = None
             context.window_manager.event_timer_remove(self.timer)
             JOB = None
-            redraw_preview_panels(context)
-
-
-class FDM_OT_bake(Operator):
-    bl_idname = "fdm_print.bake"
-    bl_label = "Bake to Mesh"
-    bl_description = "Create a separate editable mesh from the current visible layers"
-    bl_options = {"REGISTER", "UNDO"}
-
-    @classmethod
-    def poll(cls, context):
-        source = active_source(context)
-        obj = existing_preview(context.scene, source) if source is not None else None
-        return JOB is None and obj is not None and not obj.get("fdm_baked_hidden")
-
-    def execute(self, context):
-        source = active_source(context)
-        obj = existing_preview(context.scene, source)
-        fused = source.fdm_print.fuse_bake
-        try:
-            graph = context.evaluated_depsgraph_get()
-            if fused:
-                modifier = node_modifier(obj)
-                if modifier is None:
-                    raise slicer.SliceError("Regenerate the preview before fusing.")
-                ids = preview.sockets(modifier.node_group)
-                inputs = modifier.properties.inputs
-                width = getattr(inputs, ids["Bead Width"]).value
-                height = getattr(inputs, ids["Layer Height"]).value
-                visible = min(obj["fdm_layers"], getattr(inputs, ids["Visible Layers"]).value)
-                paths = preview.evaluated_fusion_paths(obj, modifier, graph)
-                try:
-                    core = fusion.core_mesh(paths, width, height, visible)
-                finally:
-                    bpy.data.meshes.remove(paths)
-                try:
-                    if source.fdm_print.fusion_method == "BATCHES":
-                        data = preview.fuse_four_layers(context.scene, obj, core, graph, visible)
-                    else:
-                        data = preview.fuse_preview(obj, modifier, core, graph)
-                finally:
-                    bpy.data.meshes.remove(core)
-            else:
-                data = bpy.data.meshes.new_from_object(obj.evaluated_get(graph),
-                                                      preserve_all_data_layers=True, depsgraph=graph)
-                if not data.polygons:
-                    bpy.data.meshes.remove(data)
-                    raise slicer.SliceError("Reveal at least one layer before baking.")
-            return self.finish(context, source, obj, data, fused)
-        except (ValueError, RuntimeError, slicer.clip.ClipperException) as error:
-            self.report({"WARNING"}, str(error))
-            return {"CANCELLED"}
-
-    def invoke(self, context, event):
-        global JOB
-        source = active_source(context)
-        if not source.fdm_print.fuse_bake or bpy.app.background:
-            return self.execute(context)
-
-        self.source = source
-        self.obj = existing_preview(context.scene, source)
-        self.scene = context.scene
-        self.window = context.window
-        self.progress = (None, "Baking fused mesh…")
-        self.timer = context.window_manager.event_timer_add(0.15, window=self.window)
-        context.window_manager.modal_handler_add(self)
-        JOB = self
-        self.window.cursor_modal_set("WAIT")
-        redraw_preview_panels(context)
-        return {"RUNNING_MODAL"}
-
-    def modal(self, context, event):
-        if JOB is not self:
-            return {"CANCELLED"}
-        if event.type == "ESC" and event.value == "PRESS":
-            self.cancel(context)
-            self.report({"INFO"}, "Fused bake cancelled.")
-            return {"CANCELLED"}
-        if event.type != "TIMER" or not self.timer.time_duration:
-            return {"PASS_THROUGH"}
-        try:
-            if (context.scene != self.scene or active_source(context) != self.source
-                    or existing_preview(self.scene, self.source) != self.obj
-                    or self.obj.mode != "OBJECT" or self.source.mode != "OBJECT"
-                    or context.view_layer.objects.get(self.obj.name) != self.obj):
-                self.report({"WARNING"}, "The source or preview changed before baking.")
-                return {"CANCELLED"}
-            # Let the sidebar draw the message before the blocking Boolean runs.
-            return self.execute(context)
-        finally:
-            self.cancel(context)
-
-    def cancel(self, context):
-        global JOB
-        if JOB is self:
-            context.window_manager.event_timer_remove(self.timer)
-            JOB = None
-            if self.window in context.window_manager.windows[:]:
-                self.window.cursor_modal_restore()
-            redraw_preview_panels(context)
-
-    def finish(self, context, source, obj, data, fused):
-        label = "Fused FDM" if fused else "Baked FDM"
-        select_result = context.active_object in (source, obj)
-        baked = None
-        try:
-            data.materials.clear()
-            data.use_fake_user = False
-            baked = bpy.data.objects.new(f"{source.name} • {label}", data)
-            baked["fdm_baked"] = True
-            obj.users_collection[0].objects.link(baked)
-            baked.matrix_world = obj.matrix_world.copy()
-            baked.fdm_print.source = source
-            context.view_layer.update()
-        except Exception:
-            if baked is None:
-                bpy.data.meshes.remove(data)
-            else:
-                remove_object(baked)
-            raise
-        hide_previous_bakes(context.view_layer, source, exclude=baked)
-        set_preview_hidden(obj, True)
-        hide_source(context, source)
-        if select_result:
-            for selected in context.selected_objects:
-                selected.select_set(False)
-            baked.select_set(True)
-            context.view_layer.objects.active = baked
-        return {"FINISHED"}
+            redraw_preview_progress(context)
 
 
 def hide_source(context, source):
@@ -504,34 +428,6 @@ class FDM_OT_remove(Operator):
             source.hide_render = False
             source.select_set(True)
             context.view_layer.objects.active = source
-        return {"FINISHED"}
-
-
-def set_preview_hidden(obj, hidden):
-    obj["fdm_baked_hidden"] = hidden
-    obj.hide_set(hidden)
-    obj.hide_render = hidden
-    modifier = node_modifier(obj)
-    if modifier:
-        modifier.show_viewport = not hidden
-
-
-class FDM_OT_show(Operator):
-    bl_idname = "fdm_print.show"
-    bl_label = "Show Live Preview"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        source = active_source(context)
-        obj = existing_preview(context.scene, source)
-        if obj is None:
-            return {"CANCELLED"}
-        hide_previous_bakes(context.view_layer, source)
-        set_preview_hidden(obj, False)
-        for selected in context.selected_objects:
-            selected.select_set(False)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
         return {"FINISHED"}
 
 
@@ -586,6 +482,10 @@ class FDM_OT_repair(Operator):
                 obj.modifiers.remove(modifier)
                 obj.data = rebuilt
                 bpy.data.meshes.remove(mesh)
+            if not obj.material_slots and source.active_material is not None:
+                obj.data.materials.append(source.active_material)
+            if obj.material_slots:
+                obj.active_material_index = min(source.active_material_index, len(obj.material_slots) - 1)
             config = SimpleNamespace(size=source.fdm_print.size, weight_group="")
             evaluated_input(context, obj, config)
         except (RuntimeError, ValueError) as error:
@@ -601,7 +501,8 @@ class FDM_OT_repair(Operator):
         context.view_layer.objects.active = obj
         previous = existing_preview(context.scene, source)
         if previous is not None:
-            set_preview_hidden(previous, True)
+            previous.hide_set(True)
+            previous.hide_render = True
         hide_previous_bakes(context.view_layer, source)
         hide_source(context, source)
         self.report({"INFO"}, "Created a closed copy. Generate the preview from this copy.")
@@ -636,7 +537,7 @@ def estimate_vertices(source, settings):
     support_points = layers * x * y / max(width * 6, 2, settings.support_spacing) ** 2 * 3 if settings.supports != "OFF" else 0
     skirt_points = 4 * settings.skirt_loops if settings.skirt else 0
     brim_points = 4 * ceil(settings.brim_width / width) if settings.brim else 0
-    return layers, round(preview.BEAD_PROFILE_SEGMENTS * (wall_points + fill_points + support_points + skirt_points + brim_points))
+    return layers, round(loft.PROFILE_SAMPLES * (wall_points + fill_points + support_points + skirt_points + brim_points))
 
 
 def orientation_source(context):
@@ -708,11 +609,9 @@ class FDM_PT_preview(Panel):
             factor, stage = JOB.progress
             box = layout.box()
             box.label(text=stage)
-            if factor is not None:
+            if not context.screen.show_statusbar or not hasattr(context.window, "global_areas"):
                 box.progress(factor=factor, type="BAR", text=f"{factor:.0%}")
-                box.label(text="Esc to cancel")
-            else:
-                box.label(text="Blender pauses during baking")
+            box.label(text="Esc to cancel")
         if context.mode == "EDIT_MESH" and orientation_source(context) is not None:
             layout.operator("fdm_print.lay_on_face")
             layout.operator("fdm_print.auto_orient")
@@ -764,7 +663,10 @@ class FDM_PT_preview(Panel):
             layout.label(text="Open or non-manifold mesh", icon="ERROR")
         layout.operator("fdm_print.repair")
         if JOB is None:
-            layout.operator("fdm_print.generate", text="Regenerate" if obj else "Generate")
+            row = layout.row(align=True)
+            row.operator("fdm_print.generate", text="Regenerate" if obj else "Generate")
+            if obj:
+                row.operator("fdm_print.remove")
         if obj:
             box = layout.box()
             box.label(text=f"{obj['fdm_layers']} generated layers")
@@ -773,27 +675,30 @@ class FDM_PT_preview(Panel):
                 ids = preview.sockets(modifier.node_group)
                 for name in (name for name in LIVE if name in ids):
                     box.prop(getattr(modifier.properties.inputs, ids[name]), "value",
-                             text=name, slider=name == "Imperfections" or name in preview.EFFECTS)
-            if obj.get("fdm_baked_hidden"):
-                box.operator("fdm_print.show")
-            else:
-                box.prop(settings, "fuse_bake")
-                if settings.fuse_bake:
-                    box.prop(settings, "fusion_method")
-                box.operator("fdm_print.bake")
-            box.operator("fdm_print.remove")
+                             text=name, slider=True)
 
 
-CLASSES = (FDMSettings, FDM_OT_generate, FDM_OT_bake, FDM_OT_remove, FDM_OT_show, FDM_OT_repair, FDM_OT_lay_on_face, FDM_OT_auto_orient, FDM_PT_preview)
+
+CLASSES = (FDMSettings, FDM_OT_generate, FDM_OT_remove, FDM_OT_repair, FDM_OT_lay_on_face, FDM_OT_auto_orient, FDM_PT_preview)
+
+
+@persistent
+def cancel_generation_on_load(_):
+    if JOB is not None:
+        JOB.cancel(bpy.context)
 
 
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Object.fdm_print = PointerProperty(type=FDMSettings)
+    bpy.app.handlers.load_pre.append(cancel_generation_on_load)
+    bpy.types.STATUSBAR_HT_header.append(draw_generation_progress)
 
 
 def unregister():
+    bpy.types.STATUSBAR_HT_header.remove(draw_generation_progress)
+    bpy.app.handlers.load_pre.remove(cancel_generation_on_load)
     if JOB is not None:
         JOB.cancel(bpy.context)
     del bpy.types.Object.fdm_print

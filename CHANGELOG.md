@@ -2,6 +2,17 @@
 
 Full release notes and installable packages are available on [GitHub Releases](https://github.com/nikgrv/FDMfier/releases).
 
+## 1.1.1
+
+- Rebuilt the preview solver to generate a render-ready mesh in one step, replacing the bake and fusion workflow.
+- Reduced generation time on a 250-layer Gyroid Benchy by 41.8% compared with an earlier 1.1.1 development build. The meshes matched exactly.
+- Improved thin lower walls, profile joins, and layer reveal for dense prints.
+- Preserved preview materials on regeneration and gave both support styles a separate material slot.
+- Moved generation progress to Blender’s status bar, with a sidebar fallback.
+- Bundled Linux x64 wheels for Python 3.13 and 3.14. Thanks to [@wonderrozz-coder](https://github.com/wonderrozz-coder) for diagnosing and testing the fix. [Issue #1](https://github.com/nikgrv/FDMfier/issues/1)
+
+[Read the 1.1.1 release notes](docs/releases/1.1.1.md).
+
 ## 1.0.10
 
 - Added Gyroid, Cubic, Cross 3D, and Adaptive Cubic infill.

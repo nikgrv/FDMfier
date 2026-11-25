@@ -104,8 +104,6 @@ def coordinates(obj):
 cube = bpy.context.object
 assert math.isclose(cube.fdm_print.layer_height, 0.30, abs_tol=1e-7)
 assert cube.fdm_print.density == 15
-assert cube.fdm_print.fusion_method == "V1"
-assert set(addon.FDMSettings.bl_rna.properties["fusion_method"].enum_items.keys()) == {"V1", "BATCHES"}
 original = coordinates(cube)
 for density in (0, 15, 100):
     paths, layers, narrow = slice_object(cube, density=density, skirt=True)
@@ -155,8 +153,10 @@ for pattern in ("LINES", "GRID", "TRIANGLES", "CONCENTRIC", "HONEYCOMB", "PARALL
 # New surface patterns remain on their own top/bottom skins and preserve holes.
 for pattern in ("HILBERT", "ARCHIMEDEAN", "OCTAGRAM"):
     paths, count, _ = slice_object(tube, density=0, top_pattern=pattern, bottom_pattern=pattern)
-    assert any(p.feature == slicer.INFILL and p.top_skin and p.layer == count - 1 for p in paths)
-    assert any(p.feature == slicer.INFILL and not p.top_skin and p.layer == 0 for p in paths)
+    for layer, top in ((0, False), (count - 1, True)):
+        skin = [p for p in paths if p.feature == slicer.INFILL and p.top_skin == top and p.layer == layer]
+        assert any(not p.closed for p in skin)
+        assert sum(p.closed for p in skin) >= 2  # A track around the outside and around the hole.
     assert not any(p.feature == slicer.INFILL and p.layer == count // 2 for p in paths)
     for path in paths:
         if path.feature != slicer.INFILL:
@@ -166,15 +166,13 @@ for pattern in ("HILBERT", "ARCHIMEDEAN", "OCTAGRAM"):
 tube.fdm_print.top_pattern = tube.fdm_print.bottom_pattern = "LINES"
 tube.fdm_print.density = 15
 
-assert any(path.feature == slicer.WEB for path in paths)
 assert bpy.ops.fdm_print.generate() == {"FINISHED"}
 tube_preview = bpy.context.object
-live(tube_preview, "Imperfections").value = 0
-assert slicer.WEB not in {v.value for v in evaluated(tube_preview).attributes["fdm_feature"].data}
-live(tube_preview, "Imperfections").value = 1
-assert slicer.WEB in {v.value for v in evaluated(tube_preview).attributes["fdm_feature"].data}
 live(tube_preview, "Visible Layers").value = 1
-assert slicer.WEB not in {v.value for v in evaluated(tube_preview).attributes["fdm_feature"].data}
+tube_mesh = evaluated(tube_preview)
+tree = BVHTree.FromPolygons([v.co for v in tube_mesh.vertices], [tuple(f.vertices) for f in tube_mesh.polygons])
+assert tree.ray_cast((0, 0, 12), (0, 0, -1))[0] is None  # The reveal cap must leave the bore open.
+assert tree.ray_cast((4.5, 0, 12), (0, 0, -1))[0] is not None
 assert bpy.ops.fdm_print.remove() == {"FINISHED"}
 
 islands = solid_cells("Disconnected", {(0, 0, 0), (2, 0, 0)})
@@ -232,13 +230,70 @@ for tree_mode in (False, True):
     assert support_paths(blocked_layers, tree_mode)
     assert not support_paths(blocked_layers, tree_mode, build_plate_only=True)
     assert any(path.layer == 0 for path in support_paths(support_layers, tree_mode, build_plate_only=True))
-beam.fdm_print.support_angle = 45
-paths, _, _ = slice_object(beam)
-assert any(sag > 0 for path in paths if path.wall and path.layer == 45
-           for *_, sag in preview.path_points(path, slicer.units(0.6)))
-assert all(sag == 0 for path in paths if path.wall and path.layer == 10
-           for *_, sag in preview.path_points(path, slicer.units(0.6)))
+activate(beam)
+settings = beam.fdm_print
+settings.support_angle = 45
+settings.layer_height = 0.6
+settings.size = 18
+settings.build_plate_only = True
+body_material = bpy.data.materials.new("Source material")
+beam.data.materials.append(body_material)
+support_material = bpy.data.materials.new("Support material")
+preview_material = bpy.data.materials.new("Preview material")
+for mode in ("STANDARD", "TREE"):
+    settings.supports = mode
+    assert bpy.ops.fdm_print.generate() == {"FINISHED"}
+    supported = bpy.context.object
+    assert supported.material_slots[0].material == (body_material if mode == "STANDARD" else preview_material)
+    assert supported.get("fdm_support_slot")
+    assert supported.material_slots[1].material == (None if mode == "STANDARD" else support_material)
+    geom = evaluated(supported)
+    assert {face.material_index for face in geom.polygons} == {0, 1}
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(geom)
+        assert all(edge.is_manifold and edge.is_contiguous for edge in bm.edges), mode
+    finally:
+        bm.free()
+    slot_vertices = {i for f in geom.polygons if f.material_index == 1 for i in f.vertices}
+    assert min(geom.vertices[i].co.z for i in slot_vertices) <= settings.layer_height / settings.size
+    if mode == "STANDARD":
+        supported.material_slots[0].material = preview_material
+        supported.material_slots[1].material = support_material
+        supported.active_material_index = 1
 
+live(supported, "Visible Layers").value = 2
+assert {face.material_index for face in evaluated(supported).polygons} == {0, 1}
+live(supported, "Visible Layers").value = supported["fdm_layers"]
+shape = coordinates(supported)
+live(supported, "Imperfections").value = 1
+assert coordinates(supported) != shape
+droop = supported.data.attributes[addon.loft.DROOP_ATTRIBUTE]
+assert any(value.value for value in droop.data)
+bed_min = min(v.co.z for v in supported.data.vertices)
+assert not any(value.value and abs(vertex.co.z - bed_min) < 0.02
+               for value, vertex in zip(droop.data, supported.data.vertices))
+assert bpy.ops.fdm_print.remove() == {"FINISHED"}
+
+# A blank weight mask keeps the preview unchanged. Invert it to apply
+# imperfections without altering the source vertex group.
+painted = beam.vertex_groups.new(name="Painted")
+settings.supports = "OFF"
+settings.weight_group = painted.name
+settings.invert_weight_group = False
+assert bpy.ops.fdm_print.generate() == {"FINISHED"}
+masked = bpy.context.object
+shape = coordinates(masked)
+live(masked, "Imperfections").value = 1
+assert coordinates(masked) == shape
+settings.invert_weight_group = True
+assert bpy.ops.fdm_print.generate() == {"FINISHED"}
+masked = bpy.context.object
+assert live(masked, "Imperfections").value == 1
+changed = coordinates(masked)
+live(masked, "Imperfections").value = 0
+assert coordinates(masked) != changed
+assert bpy.ops.fdm_print.remove() == {"FINISHED"}
 activate(cube)
 cube.fdm_print.density = 15
 cube.fdm_print.skirt = False
@@ -249,22 +304,15 @@ assert max(abs(a - b) for a, b in zip(obj.dimensions, cube.dimensions)) < 0.06
 estimate = addon.estimate_vertices(cube, cube.fdm_print)
 assert estimate[0] == 60 and estimate[1] > 1000
 full = len(evaluated(obj).polygons)
+original_geometry = obj.data
+live(obj, "Visible Layers").value = 0
+assert not evaluated(obj).vertices
 live(obj, "Visible Layers").value = 10
 partial = len(evaluated(obj).polygons)
-assert 0 < partial < full
-before = coordinates(obj)
-live(obj, "Imperfections").value = 1
-assert coordinates(obj) != before
-before = coordinates(obj)
-live(obj, "Seam Placement").value = "Staggered"
-assert coordinates(obj) != before
-assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-baked = bpy.context.object
-assert baked != obj and not baked.modifiers and len(baked.data.polygons) == partial
+assert 0 < partial < full and obj.data == original_geometry
 assert cube.hide_get() and cube.hide_render
 assert (obj.location - Vector((0, 0, -1))).length < 1e-6
-assert baked.matrix_world == obj.matrix_world
-assert obj.hide_get() and obj.hide_render and not addon.node_modifier(obj).show_viewport
+assert not hasattr(bpy.types, "FDM_OT_bake")
 
 with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
     path = str(Path(directory) / "preview.blend")
@@ -273,17 +321,12 @@ with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
     cube = bpy.data.objects["Cube"]
     obj = addon.existing_preview(bpy.context.scene, cube)
     assert live(obj, "Visible Layers").value == 10
-    assert live(obj, "Seam Placement").value == "Staggered"
-    assert obj.hide_get() and obj.hide_render
-    assert bpy.ops.fdm_print.show() == {"FINISHED"}
     assert not obj.hide_get() and not obj.hide_render
     assert len(evaluated(obj).polygons) == partial
     activate(obj)
     assert bpy.ops.fdm_print.generate() == {"FINISHED"}
     obj = bpy.context.object
     assert live(obj, "Visible Layers").value == 10
-    assert live(obj, "Imperfections").value == 1
-    assert live(obj, "Seam Placement").value == "Staggered"
 
     # Create invalid evaluated input without altering the original mesh data.
     mod = cube.modifiers.new("Open source for regression check", "MASK")
@@ -311,6 +354,7 @@ with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
                           prepare_snapshot=lambda _: operator.prepare_snapshot(job, bpy.context),
                           finish=lambda _, result: operator.finish(job, bpy.context, result))
     job.cancel = MethodType(operator.cancel, job)
+    job.generation_steps = MethodType(operator.generation_steps, job)
 
     for cancel in (True, False):
         assert operator.invoke(job, modal_context, None) == {"RUNNING_MODAL"}
@@ -320,7 +364,7 @@ with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
             assert operator.modal(job, modal_context, timer_event) == {"RUNNING_MODAL"}
             if job.result is not None:
                 break
-        assert job.progress == (0.96, "Creating Blender preview")
+        assert job.progress == (0.99, "Creating Blender preview")
         assert addon.existing_preview(bpy.context.scene, cube) == obj
         if cancel:
             esc = SimpleNamespace(type="ESC", value="PRESS")
@@ -378,7 +422,6 @@ with tempfile.TemporaryDirectory(prefix="fdm-smoke-") as directory:
     activate(obj)
     assert bpy.ops.fdm_print.remove() == {"FINISHED"}
     assert addon.existing_preview(scene, cube) is None
-    assert bpy.data.objects.get("Cube • Baked FDM") is not None
 
 # A closed copy is generated from a box with a missing face.
 opened = mesh_object("Open cube", [tuple(vertex.co) for vertex in cube.data.vertices],
@@ -388,45 +431,10 @@ repaired = bpy.context.object
 assert repaired != opened and len(repaired.data.polygons) == 6 and len(opened.data.polygons) == 5
 assert opened.hide_get() and opened.hide_render
 
-# Independent skins and an imperfection mask transferred from the source.
+# Independent skins.
 paths, _, _ = slice_object(repaired, skins=2, bottom_layers=0, density=0, top_pattern="CONCENTRIC")
 assert not any(path.feature == slicer.INFILL and path.layer == 0 for path in paths)
 assert any(path.feature == slicer.INFILL and path.closed and path.layer == 59 for path in paths)
-group = repaired.vertex_groups.new(name="Painted")
-group.add([vertex.index for vertex in repaired.data.vertices if vertex.co.x > 0], 1.0, "REPLACE")
-repaired.fdm_print.weight_group = group.name
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-masked = bpy.context.object
-mask = [value.value for value in masked.data.attributes["fdm_mask"].data]
-assert min(mask) == 0 and max(mask) == 1 and any(0 < value < 1 for value in mask)
-repaired.fdm_print.invert_weight_group = True
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-masked = bpy.context.object
-inverted = [value.value for value in masked.data.attributes["fdm_mask"].data]
-assert all(abs(a + b - 1) < 1e-6 for a, b in zip(mask, inverted))
-assert not evaluated(masked).materials
-live(masked, "Imperfections").value = 0
-baseline = coordinates(masked)
-for name in preview.EFFECTS:
-    live(masked, name).value = 0
-live(masked, "Imperfections").value = 1
-assert all(abs(a[2] - b[2]) < 1e-6 for a, b in zip(coordinates(masked), baseline))
-live(masked, "Overhang Droop").value = 1
-assert all(abs(a[2] - b[2]) < 1e-6 for a, b in zip(coordinates(masked), baseline))  # Painting a supported wall cannot make it droop.
-seam_only = coordinates(masked)
-live(masked, "Width Variation").value = 1
-assert coordinates(masked) != seam_only
-
-beam = bpy.data.objects["Cantilever"]
-activate(beam)
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-overhang = bpy.context.object
-live(overhang, "Imperfections").value = 1
-for name in preview.EFFECTS:
-    live(overhang, name).value = 0
-baseline = coordinates(overhang)
-live(overhang, "Overhang Droop").value = 1
-assert any(a[2] != b[2] for a, b in zip(coordinates(overhang), baseline))
 
 # An extra face attached to an existing edge forces the voxel fallback.
 vertices = [tuple(vertex.co) for vertex in cube.data.vertices]
@@ -477,173 +485,5 @@ bpy.ops.object.mode_set(mode="EDIT")
 assert bpy.ops.fdm_print.auto_orient() == {"FINISHED"}
 assert bpy.context.mode == "EDIT_MESH"
 bpy.ops.object.mode_set(mode="OBJECT")
-
-# The same extrusion paths should have fewer glass/air interfaces when fused.
-def mesh_tree(mesh):
-    return BVHTree.FromPolygons([v.co for v in mesh.vertices],
-                                [tuple(p.vertices) for p in mesh.polygons])
-
-
-def vertical_hits(tree, x, y):
-    position = Vector((x, y, -1))
-    axis = Vector((0, 0, 1))
-    hits = []
-    while True:
-        point, _, _, _ = tree.ray_cast(position, axis)
-        if point is None:
-            return hits
-        hits.append(point.z)
-        position = point + axis * 0.00001
-
-
-for source, density in ((cube, 100), (cube, 15), (cube, 0), (bpy.data.objects["Hollow cylinder"], 15)):
-    activate(source)
-    settings = source.fdm_print
-    settings.size = 12
-    settings.layer_height = 0.6
-    settings.width = 0.45
-    settings.density = density
-    settings.skins = settings.bottom_layers = 2
-    settings.pattern = "GRID"
-    settings.brim = source == cube and density == 100
-    assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-    live_obj = bpy.context.object
-    live(live_obj, "Imperfections").value = 0
-    if source == cube and density == 100:
-        bead_hits = vertical_hits(mesh_tree(evaluated(live_obj)), 0.01, 0.02)
-    source.fdm_print.fuse_bake = True
-    source.fdm_print.fusion_method = "BATCHES" if source == cube and density == 15 else "V1"
-    assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-    fused = bpy.context.object
-    assert live_obj.hide_get() and live_obj.hide_render and fused.matrix_world == live_obj.matrix_world
-    assert not fused.data.materials and source.hide_get() and source.hide_render
-    bm = bmesh.new()
-    bm.from_mesh(fused.data)
-    assert all(edge.is_manifold and edge.is_contiguous for edge in bm.edges)
-    volume = bm.calc_volume(signed=True)
-    bm.free()
-    assert volume > 0
-    if source == cube and density == 100:
-        assert live_obj.vertex_groups.get("Brim")
-        assert max(v.co.x for v in fused.data.vertices) > 1.2
-        dense_volume = volume
-        assert len(bead_hits) > 10 and len(vertical_hits(mesh_tree(fused.data), 0.01, 0.02)) == 2
-        # The cap has shallow channels while the vertical walls keep a straight outline.
-        tree = mesh_tree(fused.data)
-        top_heights = {round(vertical_hits(tree, i / 100, 0.02)[-1], 5)
-                       for i in range(-35, 36)}
-        assert len(top_heights) >= 2, top_heights
-        right = {round(tree.ray_cast((2, 0.1, i / 100), (-1, 0, 0))[0].x, 5)
-                 for i in range(31, 69)}
-        assert len(right) >= 4, right
-        flat_x = tree.ray_cast((2, 0.1, 1), (-1, 0, 0))[0].x
-        corner = tree.ray_cast((2, 2, 1), (-1, -1, 0))[0]
-        rim = tree.ray_cast((2, 0.1, 1.997), (-1, 0, 0))[0]
-        assert flat_x - corner.x > 0.005  # Actual round corner in the XY silhouette.
-        assert flat_x - rim.x > 0.003  # Actual roundover at the top lip.
-
-    elif source == cube:
-        assert volume < dense_volume * 0.8
-        if density == 15:
-            sparse_volume = volume
-        else:
-            assert volume < sparse_volume
-            tree = mesh_tree(fused.data)
-            for z in (0.49, 0.50, 0.525, 0.55):
-                point = Vector((-2, 0.117, z))
-                hits = []
-                while True:
-                    hit, *_ = tree.ray_cast(point, (1, 0, 0))
-                    if hit is None:
-                        break
-                    hits.append(hit.x)
-                    point = hit + Vector((0.00001, 0, 0))
-                assert len(hits) == 4, hits
-            attr = live_obj.data.attributes
-            assert not any(feature.value == slicer.INFILL and 2 <= layer.value < 18
-                           for feature, layer in zip(attr["fdm_feature"].data, attr["fdm_layer"].data))
-    else:
-        assert not vertical_hits(mesh_tree(fused.data), 0, 0)
-    assert bpy.ops.fdm_print.show() == {"FINISHED"}
-    assert not live_obj.hide_get() and fused.hide_get() and fused.hide_render
-
-# Bake a partially revealed preview with live imperfections using both solvers.
-activate(cube)
-cube.fdm_print.density = 15
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-live_obj = bpy.context.object
-live(live_obj, "Visible Layers").value = 13
-live(live_obj, "Imperfections").value = 0.8
-bpy.context.view_layer.update()
-reveal_height = 13 * live(live_obj, "Layer Height").value
-cube.fdm_print.fuse_bake = True
-for method in ("V1", "BATCHES"):
-    cube.fdm_print.fusion_method = method
-    assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-    result = bpy.context.object
-    assert result["fdm_baked"] and len(result.data.polygons) > 0
-    assert result.matrix_world == live_obj.matrix_world and live_obj.hide_get()
-    assert max(vertex.co.z for vertex in result.data.vertices) <= reveal_height * 1.02
-    assert bpy.ops.fdm_print.show() == {"FINISHED"}
-    assert bpy.context.object == live_obj and not live_obj.hide_get()
-cube.fdm_print.fusion_method = "V1"
-
-tube = bpy.data.objects["Hollow cylinder"]
-activate(tube)
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-live_obj = bpy.context.object
-live(live_obj, "Imperfections").value = 1
-feature = evaluated(live_obj).attributes["fdm_feature"].data
-web_points = sum(item.value == slicer.WEB for item in feature)
-assert web_points > 0
-tube.fdm_print.fuse_bake = True
-assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-fused = bpy.context.object
-assert len(fused.data.vertices) > web_points
-# Fusion keeps the exposed strand geometry and can clip the embedded ends.
-assert bpy.ops.fdm_print.show() == {"FINISHED"}
-live_mesh = evaluated(live_obj)
-original_web = {tuple(v.co) for v in live_mesh.vertices
-                if live_mesh.attributes["fdm_feature"].data[v.index].value == slicer.WEB}
-assert len(original_web & {tuple(v.co) for v in fused.data.vertices}) > len(original_web) * 0.5
-
-# Changing seam placement must move localized relief on the fused hull,
-# even with stringing, layer drift and droop disabled.
-for effect in preview.EFFECTS:
-    live(live_obj, effect).value = 0
-bakes = []
-for seam in ("Aligned Rear", "Staggered"):
-    live(live_obj, "Seam Placement").value = seam
-    assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-    mesh = bpy.context.object.data
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-    assert all(edge.is_manifold for edge in bm.edges)
-    bm.free()
-    bakes.append({tuple(vertex.co) for vertex in mesh.vertices})
-    assert bpy.ops.fdm_print.show() == {"FINISHED"}
-assert bakes[0] != bakes[1]
-
-# A variation in bead width must never shrink the extrusion vertically.
-activate(cube)
-cube.fdm_print.density = 0
-cube.fdm_print.skins = cube.fdm_print.bottom_layers = 0
-assert bpy.ops.fdm_print.generate() == {"FINISHED"}
-live_obj = bpy.context.object
-for effect in preview.EFFECTS:
-    live(live_obj, effect).value = int(effect == "Width Variation")
-live(live_obj, "Imperfections").value = 0
-original = coordinates(live_obj)
-assert all(face.use_smooth for face in evaluated(live_obj).polygons)
-live(live_obj, "Seam Placement").value = "Staggered"
-assert coordinates(live_obj) == original
-live(live_obj, "Imperfections").value = 1
-varied = coordinates(live_obj)
-assert original != varied
-assert len(original) == len(varied)
-assert all(abs(a[2] - b[2]) < 1e-6 for a, b in zip(original, varied))
-cube.fdm_print.fuse_bake = False
-assert bpy.ops.fdm_print.bake() == {"FINISHED"}
-assert coordinates(bpy.context.object) == varied
 
 print("FDM smoke tests passed")
