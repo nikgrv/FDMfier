@@ -1,5 +1,17 @@
 # Using FDMfier
 
+1. In Object Mode, select a closed mesh. Press **N** in the 3D Viewport and
+   open the **FDMfier** tab.
+2. Set the print options and click **Generate**. The render-ready preview
+   appears in place with the source hidden.
+3. Use **Visible Layers** or **Imperfections** to adjust the preview live.
+   Use **Regenerate** after changing print settings or updating a preview
+   made before 1.1.1.
+4. Assign materials in **Material Properties** and render the preview directly.
+   **Remove Preview** restores the source.
+
+## Print settings
+
 - **Simulated Print Size** sets the longest dimension used to calculate slicing
   detail in millimeters. The finished preview is scaled back to the source's
   scene size. World Z is the build direction.
@@ -26,10 +38,10 @@
 - **Brim** adds attached tracks around the outside of the first layer. Set
   **Brim Width** in simulated print millimeters. With both enabled, the skirt
   starts beyond the brim.
-- **Generate** builds a continuous Joined Profiles mesh with rounded layers,
-  patterned skins, and air spaces between sparse infill. It is ready to render
-  with translucent materials. Change print settings and click **Regenerate**
-  to rebuild it. The status bar shows progress while Blender works. Press **Esc** to cancel.
+- **Generate** builds a continuous mesh with rounded layers, patterned
+  surfaces, and air gaps between sparse infill tracks. Assign a translucent
+  material directly to the preview. The status bar shows generation progress.
+  Press **Esc** to cancel.
 - **Visible Layers** works in the sidebar and the Geometry Nodes modifier.
   Partial reveals show a closed cross-section with the infill and air gaps
   visible. The slider uses the generated mesh in viewport and render.
@@ -42,7 +54,6 @@
 - When supports are enabled, **Overhang Angle** measures the minimum angle
   from vertical. Horizontal undersides are 90°. Tree branches share trunks
   that taper gradually toward the bed and widen as they carry more tips.
-- Regenerate earlier previews to use Joined Profiles and its reveal slider.
 
 This is a visual FDM replica for closed mesh solids, including meshes with holes
 through the solid and disconnected shells. Features thinner than the extrusion

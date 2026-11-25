@@ -16,9 +16,8 @@ FDM print previews for Blender, with visible layers, patterned infill, and adjus
 ![Blue Benchy rendered with FDMfier, showing rounded layer lines and a patterned top surface](docs/images/benchy_blue_100.png)
 
 FDMfier makes a closed mesh look like it came off an FDM printer. Set the layer
-height, walls, and infill, then add supports or a little stringing. The Joined
-Profiles preview can reveal the print layer by layer and render directly.
-The preview keeps the source model’s size and position.
+height, walls, and infill, then add supports or a little stringing. Generate
+creates a render-ready preview at the source model’s size and position.
 
 [Read the 1.1.1 release notes](docs/releases/1.1.1.md).
 
@@ -36,7 +35,19 @@ from the latest release. [GitHub Releases](https://github.com/nikgrv/FDMfier/rel
 
 1. Open **Edit → Preferences → Add-ons**, open the menu, and choose **Install from Disk**.
 2. Select the downloaded ZIP and enable **FDMfier** if needed.
-3. Select a solid mesh, open the 3D Viewport sidebar with **N**, and choose **FDMfier → Generate**.
+
+## Quick start
+
+1. In Object Mode, select a closed mesh and open the 3D Viewport sidebar with
+   **N**. Choose **FDMfier**.
+2. Set the layer height, wall count, and infill, then click **Generate**. The
+   result is ready to render in place, and the source object is hidden.
+3. Adjust **Visible Layers** or **Imperfections** live. To change slicing
+   settings or update a preview made before 1.1.1, click **Regenerate**.
+4. Assign materials to the preview in **Material Properties**. **Remove
+   Preview** restores the source.
+
+[Full usage guide](docs/USAGE.md)
 
 ## Infill and surface patterns
 
@@ -81,11 +92,11 @@ update immediately. Default settings use **0.30 mm layers**, **two wall lines**,
 </tr>
 </table>
 
-Joined Profiles connects neighboring extrusions into a continuous shell with
+Generation connects neighboring extrusions into a continuous shell with
 rounded layer ridges. The selected wall count sets the shell thickness, while
-spaces between sparse infill tracks remain hollow. Generate uses your source’s
-active material. You can assign a different material to the preview or to its
-separate supports slot, and Regenerate keeps those assignments.
+spaces between sparse infill tracks remain hollow. **Generate** uses the
+source’s active material. **Regenerate** keeps the materials assigned to
+the preview, including the separate support material slot.
 
 FDMfier creates visual replicas for renders. Use a dedicated slicer to prepare
 printer toolpaths and G-code. The input should be a closed mesh solid. See the
