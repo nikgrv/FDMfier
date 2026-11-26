@@ -102,12 +102,20 @@ FDMfier creates visual replicas for renders. Use a dedicated slicer to prepare
 printer toolpaths and G-code. The input should be a closed mesh solid. See the
 usage guide for thin features, support coverage, and geometry limits.
 
+## Performance comparison
+
+![Side-by-side translucent Benchy renders and timings for FDMfier 1.0.9 and 1.1.1](docs/images/benchy-performance-comparison.jpg)
+
+In this Benchy test, processing dropped from **9m 58s to 1m 59s** and rendering
+from **9m 42s to 5m 40s**. Total time dropped from **19m 40s to 7m 39s**,
+about **61% less time**.
+
 ## Roadmap
 
-- [ ] Improve slicing and mesh generation performance while retaining layer detail and translucent rendering quality.
 - [ ] Test the current release on Windows, Linux, and Intel Mac builds.
 - [ ] Add easier controls for print animations.
-- [ ] Expand infill and surface pattern options.
+- [ ] Expand infill and surface pattern options further.
+- [x] Speed up preview generation. [Benchy comparison](#performance-comparison)
 - [x] Support Blender 5.2 LTS.
 - [x] Confirm an earlier release works on Windows x64 with Blender 5.2.
 - [x] Add Gyroid, Cubic, Cross 3D, Adaptive Cubic, and more surface patterns.
